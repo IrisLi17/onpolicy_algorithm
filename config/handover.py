@@ -1,12 +1,15 @@
 config = dict(
-    env_id="PandaTowerBimanualPPO-v1",
+    env_id="PandaHandoverBimanual-v1",
     num_workers=64,
-    log_dir="logs/handover/test",
+    log_dir="logs/handover/1b_os0.5_inhand0.2",
     total_timesteps=int(1e8),
     create_env_kwargs=dict(
         obs_keys=["observation", "achieved_goal", "desired_goal"],
         done_when_success=False,
-        kwargs=dict(os_rate=1),
+        reward_scale=50,
+        kwargs=dict(
+            os_rate=0.5,
+            obj_in_hand_rate=0.2),
     ),
     obs_parser=dict(
         robot_dim=14,
