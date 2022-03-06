@@ -1,4 +1,4 @@
-from torch_algorithms.policies.base import ActorCriticPolicy
+from policies.base import ActorCriticPolicy
 from torch.distributions.categorical import Categorical
 from torch.distributions.normal import Normal
 import torch.nn as nn

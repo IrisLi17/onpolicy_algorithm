@@ -13,7 +13,7 @@ def make_env(env_id, rank, log_dir=None, obs_keys=None, done_when_success=False,
     if obs_keys is not None and isinstance(obs_keys, list):
         env = FlattenDictWrapper(env, obs_keys)
     if done_when_success:
-        env = DoneOnSuccessWrapper(env, reward_offset=0.0)
+        env = DoneOnSuccessWrapper(env, reward_offset=1.0)
     env = ScaleRewardWrapper(env, reward_scale=reward_scale)
     if log_dir is not None:
         env = Monitor(env, os.path.join(log_dir, "%d.monitor.csv" % rank), info_keywords=("is_success",))

@@ -557,6 +557,8 @@ class AttentionGaussianPolicy(ActorCriticPolicy):
         #       [nn.Linear(hidden_size, self.action_dim)])
         # )
         self.actor_logstd = nn.Parameter(-torch.ones(self.action_dim))
+        self.is_recurrent = False
+        self.recurrent_hidden_state_size = 1
         self._initialize()
 
     def _initialize(self):
@@ -572,9 +574,9 @@ class AttentionGaussianPolicy(ActorCriticPolicy):
     def forward(self, obs, rnn_hxs=None, rnn_masks=None):
         # robot_obs, objects_obs, masks = self.parse_obs(obs)
         robot_obs, objects_obs, masks = self.obs_parser.forward(obs)
-        features = self.feature_extractor(robot_obs, objects_obs, masks)
+        features, _ = self.feature_extractor(robot_obs, objects_obs, masks)
         critic_features = features if self.critic_feature_extractor is None else \
-            self.critic_feature_extractor(robot_obs, objects_obs, masks)
+            self.critic_feature_extractor(robot_obs, objects_obs, masks)[0]
         values = self.critic_linears(critic_features)
         action_mean = self.actor_linears(features)
         # action_logstd = self.actor_logstd(features)

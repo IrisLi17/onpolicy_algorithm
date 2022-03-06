@@ -1,19 +1,22 @@
 config = dict(
     env_id="PandaHandoverBimanual-v1",
     num_workers=64,
-    log_dir="logs/handover/1b_os0.5_inhand0.2",
+    log_dir="logs/handover/attention_discrete/1b_os0.5_inhand0.5_dense_newobjinhand",
     total_timesteps=int(1e8),
     create_env_kwargs=dict(
         obs_keys=["observation", "achieved_goal", "desired_goal"],
         done_when_success=False,
-        reward_scale=50,
+        reward_scale=10,
         kwargs=dict(
             os_rate=0.5,
-            obj_in_hand_rate=0.2),
+            obj_in_hand_rate=0.5,
+            reward_type="dense",
+        ),
     ),
+    policy_type="attention_discrete",
     obs_parser=dict(
         robot_dim=14,
-        obj_dim=12,
+        obj_dim=18,
         goal_dim=3,
     ),
     policy=dict(
