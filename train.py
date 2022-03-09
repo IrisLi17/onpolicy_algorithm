@@ -48,7 +48,7 @@ def main():
         model = PPO(env, policy, device, **config.get("train", {}))
     elif config["algo"] == "pair":
         from onpolicy import PAIR
-        eval_env = make_vec_env(config["env_id"], config["num_workers"], device, **config["create_env_kwargs"])
+        eval_env = make_vec_env(config["env_id"], 20, device, **config["create_env_kwargs"])
         model = PAIR(env, policy, device=device, eval_env=eval_env, **config.get("train", {}))
 
     def callback(locals, globals):
