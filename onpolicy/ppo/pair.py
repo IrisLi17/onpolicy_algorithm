@@ -202,7 +202,7 @@ class PAIR(object):
                                 relabel_obs[:, -goal_dim:] = np.tile(relabel_obs[relabel_idx: relabel_idx + 1, -2 * goal_dim: -goal_dim], (relabel_obs.shape[0], 1))
                                 artificial_reward = self.env.env_method(
                                     "compute_reward", relabel_obs[:, -2 * goal_dim: -goal_dim], relabel_obs[:, -goal_dim:], None, indices=0)[0]
-                                seg_idx = relabel_idx
+                                seg_idx = np.where(artificial_reward >= artificial_reward[relabel_idx])[0][0]
                                 if seg_idx > 0:
                                     traj = dict(obs=relabel_obs[:seg_idx + 1],
                                                 actions=np.stack(buffer[e_idx]["actions"][:seg_idx + 1], axis=0),
