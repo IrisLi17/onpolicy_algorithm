@@ -1,6 +1,6 @@
 config = dict(
     env_id="PandaHandoverBimanual-v1",
-    num_workers=3,
+    num_workers=64,
     algo="pair",
     log_dir="logs/handover/attention_discrete/pair/1b_os0.5_inhand0.5_sparse_gap0.5",
     total_timesteps=int(5e8),
@@ -35,7 +35,7 @@ config = dict(
     train=dict(
         sil=True,
         relabel=True,
-        data_interval=1,
-        n_steps=512,
+        data_interval=10,
+        n_steps=2048,
     )
 )

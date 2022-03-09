@@ -186,7 +186,7 @@ class PAIR(object):
                                 traj = dict(obs=np.stack(buffer[e_idx]["obs"], axis=0),
                                             actions=np.stack(buffer[e_idx]["actions"], axis=0),
                                             last_step_mask=get_last_step_mask(len(buffer[e_idx]["obs"])),
-                                            reward=np.stack(buffer[e_idx]["rewards"], axis=0),
+                                            reward=np.concatenate(buffer[e_idx]["rewards"]),
                                             tag="origin")
                                 success_data_per_update.append(traj)
                         else:
@@ -207,7 +207,7 @@ class PAIR(object):
                                     traj = dict(obs=relabel_obs[:seg_idx + 1],
                                                 actions=np.stack(buffer[e_idx]["actions"][:seg_idx + 1], axis=0),
                                                 last_step_mask=get_last_step_mask(seg_idx + 1),
-                                                reward=1 - get_last_step_mask(seg_idx +1),
+                                                reward=artificial_reward[:seg_idx + 1],
                                                 tag="origin")
                                     success_data_per_update.append(traj)
 
@@ -431,8 +431,7 @@ class PAIR(object):
             last_step_mask = np.ones(len(traj["obs"]))
             last_step_mask[-1] = 0
             last_step_masks.append(last_step_mask)
-            train_reward = np.zeros(len(traj["obs"]))
-            train_reward[-1] = 1
+            train_reward = traj["reward"]
             train_rewards.append(train_reward)
             # train_traj_start_idx.append(train_traj_start_idx[-1] + len(traj["obs"]))
             if "states" in traj:
@@ -451,8 +450,8 @@ class PAIR(object):
         else:
             n_original = 0
         logger.log("n reduction:", n_reduction, "n original:", n_original)
-        il_weights = compute_il_weight(train_obs, train_action, last_step_masks, self.device, None,
-                                       train_rewards, self.policy, self.gamma, self.lam, self.il_weighted)
+        il_weights = compute_il_weight(train_obs, last_step_masks, self.device, train_rewards, self.policy, self.gamma,
+                                       self.lam, self.il_weighted)
 
         cur_values = compute_value(train_obs, self.device, self.policy)
         gae_return = compute_gae_return_multi(
@@ -565,32 +564,10 @@ def get_last_step_mask(l):
     return arr
 
 
-def compute_il_weight(train_obs, train_action, last_step_masks, device, sa_predictor=None,
-                      train_rewards=None, policy=None, gamma=0.99, gae_lambda=0.95, weighted=False):
+def compute_il_weight(train_obs, last_step_masks, device, train_rewards=None, policy=None, gamma=0.99, gae_lambda=0.95,
+                      weighted=False):
     il_weights = np.ones(train_obs.shape[0])
-    if sa_predictor is not None:
-        assert isinstance(sa_predictor, list) and isinstance(sa_predictor[0], nn.Module)
-        predictions = []
-        chunk_size = 1024
-        n_chunk = train_obs.shape[0] // chunk_size if train_obs.shape[0] % chunk_size == 0 else train_obs.shape[
-                                                                                                    0] // chunk_size + 1
-        with torch.no_grad():
-            for chunk_idx in range(n_chunk):
-                obs_batch = train_obs[chunk_idx * chunk_size: (chunk_idx + 1) * chunk_size]
-                if isinstance(obs_batch, np.ndarray):
-                    obs_batch = torch.from_numpy(obs_batch).float().to(device)
-                action_batch = train_action[chunk_idx * chunk_size: (chunk_idx + 1) * chunk_size]
-                if isinstance(action_batch, np.ndarray):
-                    action_batch = torch.from_numpy(action_batch).float().to(device)
-                prediction = get_success_prediction(
-                    sa_predictor, obs_batch, action_batch, None, None).cpu().numpy().squeeze(axis=-1)
-                predictions.append(prediction)
-        predictions = np.concatenate(predictions, axis=0)
-        diffs = np.concatenate([predictions[1:] - predictions[:-1], [0.]])
-        diffs = diffs * last_step_masks
-        assert len(diffs) == len(train_obs)
-        il_weights = np.exp(diffs)
-    elif weighted and policy is not None:
+    if weighted and policy is not None:
         values = compute_value(train_obs, device, policy)
         masks = np.concatenate([[0.], last_step_masks], axis=0)
         gae_returns = compute_gae_return_multi(train_rewards, values, masks, gamma, gae_lambda)
@@ -614,111 +591,3 @@ def compute_value(train_obs, device, policy):
             values.append(value)
     values = np.concatenate(values, axis=0)
     return values
-
-
-def get_positive_data(negative_states, negative_obs, policy, env, sa_predictor, device):
-    positive_actions = []
-    goal_dim = None
-    _count = 0
-    for idx, state in enumerate(negative_states):
-        env.reset()
-        if goal_dim is None:
-            goal_dim = env.goal.shape[0]
-        env.set_state(state)
-        env.set_goals([negative_obs[idx][-goal_dim:].cpu().numpy()])
-        env.sync_attr()
-        obs = env.get_obs()
-        obs = torch.from_numpy(
-            np.concatenate([obs[key] for key in ['observation', 'achieved_goal', 'desired_goal']])).float().to(device)
-        with torch.no_grad():
-            _, action, _, _ = policy.act(obs.unsqueeze(dim=0), deterministic=True)
-        next_obs, _, _, _ = env.step(action[0].cpu().numpy())
-        next_obs = torch.from_numpy(next_obs).float().to(device)
-        total_obs = torch.stack([obs, next_obs], dim=0)
-        predictions = get_success_prediction(sa_predictor, total_obs, None, with_action=False)
-        if predictions[1] > predictions[0]:
-            positive_actions.append(action[0].cpu().numpy())
-            _count += 1
-        else:
-            positive_actions.append(None)
-    logger.log("match count", _count, "negative count", negative_obs.shape[0])
-    return positive_actions
-
-
-def load_contrastive_data(n_total_ctrs_traj, device, policy, success_predictor=None):
-    ctrs_neg_seg_len = 3
-    adapt_seg_idx = True
-    start_traj = 30001
-    end_traj = start_traj + n_total_ctrs_traj
-    contrastive_obs, contrastive_action, contrastive_weight = [], [], []
-    with open("contrastive_buffer.pkl", "rb") as f:
-        try:
-            for _ in range(start_traj):
-                pickle.load(f)
-            for tj_idx in range(end_traj - start_traj):
-                pair = pickle.load(f)
-                pos = 0 if pair[0]["is_success"] else 1
-                neg = 0 if pair[1]["is_success"] else 1
-                if adapt_seg_idx:
-                    with torch.no_grad():
-                        _neg_predictions = success_predictor(
-                            torch.from_numpy(pair[neg]["obs"]).float().to(device)).cpu().numpy()
-                    _prediction_drop = (_neg_predictions[:-1] - _neg_predictions[1:]).squeeze()
-                    if np.max(_prediction_drop) > 0.4:
-                        # drop_idx = np.where(_prediction_drop > 0.2)[0][0]
-                        drop_idx = np.argmax(_prediction_drop)
-                    else:
-                        # drop_idx = np.argmax(_prediction_drop)
-                        continue
-                    with torch.no_grad():
-                        features = policy.get_feature(torch.from_numpy(
-                            np.concatenate(
-                                [pair[pos]["obs"], pair[neg]["obs"][drop_idx: drop_idx + 1]], axis=0)
-                        ).float().to(device), net="value").cpu().numpy()
-                    feature_dist = np.linalg.norm(features[:-1] - features[-1:], axis=-1)
-                    pos_idx = np.argmin(feature_dist)
-                else:
-                    pos_idx, drop_idx = 0, 0
-                contrastive_obs.append(
-                    np.concatenate(
-                        [pair[pos]["obs"][pos_idx:],
-                         pair[neg]["obs"][drop_idx: drop_idx + ctrs_neg_seg_len]], axis=0)
-                )
-                # train_traj_start_idx.append(train_traj_start_idx[-1] + len(contrastive_obs[-1]))
-                with torch.no_grad():
-                    _pos_predictions = success_predictor(
-                        torch.from_numpy(pair[pos]["obs"][pos_idx:]).float().to(device)).cpu().numpy()
-                pos_weight = np.exp(np.concatenate([_pos_predictions[1:] - _pos_predictions[:-1], [0.]]))
-                contrastive_weight.append(
-                    np.concatenate(
-                        [pos_weight, -np.ones(
-                            pair[neg]["obs"][drop_idx: drop_idx + ctrs_neg_seg_len].shape[0]
-                        )], axis=0)
-                )
-                # contrastive_obs.append(pair[neg]["obs"][drop_idx: drop_idx + 10])
-                # train_traj_start_idx.append(train_traj_start_idx[-1] + len(contrastive_obs[-1]))
-                # contrastive_weight.append(-np.ones(contrastive_obs[-1].shape[0]))
-                contrastive_action.append(
-                    np.concatenate(
-                        [pair[pos]["actions"][pos_idx:],
-                         pair[neg]["actions"][drop_idx: drop_idx + ctrs_neg_seg_len]], axis=0)
-                )
-                # contrastive_action.append(pair[neg]["actions"][drop_idx: drop_idx + 10])
-        except EOFError:
-            pass
-    return contrastive_obs, contrastive_action, contrastive_weight
-
-
-def get_success_prediction(sa_predictor: list, obs: torch.Tensor, action,
-                           recurrent_hidden_states=None, masks=None, with_action=True):
-    success_predictions = []
-    with torch.no_grad():
-        for m_idx in range(len(sa_predictor)):
-            if with_action:
-                success_predictions.append(sa_predictor[m_idx](
-                    obs, action, recurrent_hidden_states, masks)[0])
-            else:
-                success_predictions.append(sa_predictor[m_idx].predict_without_action(
-                    obs, recurrent_hidden_states, masks))
-        success_prediction = torch.min(torch.stack(success_predictions, dim=0), dim=0)[0]
-    return success_prediction
