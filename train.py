@@ -1,4 +1,5 @@
-from onpolicy import PPO
+import importlib
+
 import torch, os
 from utils.make_env import make_vec_env, ObsParser
 from policies.attention_discrete import AttentionDiscretePolicy
@@ -8,7 +9,7 @@ from utils import logger
 
 def parse_arguments():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--env", type=str, choices=["Handover", "fetchreach"])
+    parser.add_argument("--config", type=str)
     parser.add_argument("--play", action="store_true", default=False)
     parser.add_argument("--load_path", type=str)
     args = parser.parse_args()
@@ -18,12 +19,8 @@ def parse_arguments():
 def main():
     args = parse_arguments()
     # use a configuration file to pass in arguments
-    if args.env == "Handover":
-        from config.handover import config
-    elif args.env == "fetchreach":
-        from config.reach import config
-    else:
-        raise NotImplementedError
+    cfg_module = importlib.import_module(args.config)
+    config = cfg_module.config
     if args.play:
         config["log_dir"] = None
     logger.configure(config["log_dir"])
@@ -46,7 +43,13 @@ def main():
     else:
         raise NotImplementedError
     policy.to(device)
-    model = PPO(env, policy, device)
+    if config["algo"] == "ppo":
+        from onpolicy import PPO
+        model = PPO(env, policy, device, **config.get("train", {}))
+    elif config["algo"] == "pair":
+        from onpolicy import PAIR
+        eval_env = make_vec_env(config["env_id"], config["num_workers"], device, **config["create_env_kwargs"])
+        model = PAIR(env, policy, device=device, eval_env=eval_env, **config.get("train", {}))
 
     def callback(locals, globals):
         if locals["j"] % 50 == 0:

@@ -1,11 +1,15 @@
 import os
 import gym
-from gym.wrappers import FlattenDictWrapper
-from utils.wrapper import DoneOnSuccessWrapper, VecPyTorch, ScaleRewardWrapper
+from utils.wrapper import DoneOnSuccessWrapper, VecPyTorch, ScaleRewardWrapper, FlattenDictWrapper
 from utils.monitor import Monitor
 from vec_env.subproc_vec_env import SubprocVecEnv
 import torch
-import panda_gym
+try:
+    import panda_gym
+except:
+    import sys
+    sys.path.append("../panda-gym")
+    import panda_gym
 
 
 def make_env(env_id, rank, log_dir=None, obs_keys=None, done_when_success=False, reward_scale=1.0, kwargs=None):

@@ -1,8 +1,8 @@
 config = dict(
     env_id="PandaHandoverBimanual-v1",
-    num_workers=64,
-    algo="ppo",
-    log_dir="logs/handover/attention_discrete/1b_os0.5_inhand0.5_sparse_gap0.5",
+    num_workers=3,
+    algo="pair",
+    log_dir="logs/handover/attention_discrete/pair/1b_os0.5_inhand0.5_sparse_gap0.5",
     total_timesteps=int(5e8),
     create_env_kwargs=dict(
         obs_keys=["observation", "achieved_goal", "desired_goal"],
@@ -33,6 +33,9 @@ config = dict(
         ),
     ),
     train=dict(
-        n_steps=2048,
+        sil=True,
+        relabel=True,
+        data_interval=1,
+        n_steps=512,
     )
 )

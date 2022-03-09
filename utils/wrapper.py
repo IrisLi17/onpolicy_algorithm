@@ -1,7 +1,9 @@
 import gym
 import torch
+import numpy as np
 from vec_env.base_vec_env import VecEnvWrapper
 from collections import deque
+from gym.wrappers import FlattenDictWrapper as FlattenDictWrapperOld
 
 
 class DoneOnSuccessWrapper(gym.Wrapper):
@@ -125,6 +127,13 @@ class FlexibleTimeLimitWrapper(gym.Wrapper):
         return self.env.reset(**kwargs)
 
 
+class FlattenDictWrapper(FlattenDictWrapperOld):
+    def get_obs(self):
+        observation = self.env.get_obs()
+        assert isinstance(observation, dict)
+        return self.ravel_dict_observation(observation, self.dict_keys)
+
+
 class VecPyTorch(VecEnvWrapper):
     def __init__(self, venv, device):
         """Return only every `skip`-th frame"""
@@ -150,3 +159,8 @@ class VecPyTorch(VecEnvWrapper):
         reward = torch.from_numpy(reward).unsqueeze(dim=1).float()
         # reward = np.expand_dims(reward, axis=1).astype(np.float32)
         return obs, reward, done, info
+
+    def get_obs(self, *args, **kwargs):
+        obs = self.venv.get_obs(*args, **kwargs)
+        obs = torch.from_numpy(obs).float().to(self.device)
+        return obs
