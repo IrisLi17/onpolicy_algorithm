@@ -19,5 +19,6 @@ config = dict(
         nminibatches=16,
         noptepochs=4,
         n_steps=1024,
-    )
+    ),
+    use_wandb=True
 )

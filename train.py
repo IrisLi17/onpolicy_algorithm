@@ -24,6 +24,9 @@ def main():
     if args.play:
         config["log_dir"] = None
     logger.configure(config["log_dir"])
+    if config.get("use_wandb", False) and not args.play:
+        import wandb
+        wandb.init(config=config, project=config["algo"] + "_" + config["env_id"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if args.play:
         config["num_workers"] = 1
