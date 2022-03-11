@@ -23,10 +23,12 @@ def main():
     config = cfg_module.config
     if args.play:
         config["log_dir"] = None
+    else:
+        config["log_dir"] = "logs/%s_%s/%s" % (config["algo"], config["env_id"], config["name"])
     logger.configure(config["log_dir"])
-    if config.get("use_wandb", False) and not args.play:
+    if config["train"].get("use_wandb", False) and not args.play:
         import wandb
-        wandb.init(config=config, project=config["algo"] + "_" + config["env_id"])
+        wandb.init(config=config, project=config["algo"] + "_" + config["env_id"], name=config["name"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if args.play:
         config["num_workers"] = 1
