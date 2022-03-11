@@ -40,6 +40,9 @@ def main():
     elif config["policy_type"] == "mlp":
         from policies.mlp import MlpGaussianPolicy
         policy = MlpGaussianPolicy(env.observation_space.shape[0], env.action_space.shape[0], **config["policy"])
+    elif isinstance(config["policy_type"], tuple):
+        policy_class = importlib.import_module(config["policy_type"][0])
+        policy = policy_class.__getattribute__(config["policy_type"][1])(**config["policy"])
     else:
         raise NotImplementedError
     policy.to(device)

@@ -10,9 +10,14 @@ except:
     import sys
     sys.path.append("../panda-gym")
     import panda_gym
+import sys
+sys.path.append("../unitree_pybullet")
+import gym_env
+sys.path.remove("../unitree_pybullet")
 
 
-def make_env(env_id, rank, log_dir=None, obs_keys=None, done_when_success=False, reward_scale=1.0, kwargs=None):
+def make_env(env_id, rank, log_dir=None, obs_keys=None, done_when_success=False, reward_scale=1.0,
+             info_keywords=("is_success",), kwargs={}):
     env = gym.make(env_id, **kwargs)
     if obs_keys is not None and isinstance(obs_keys, list):
         env = FlattenDictWrapper(env, obs_keys)
@@ -20,7 +25,7 @@ def make_env(env_id, rank, log_dir=None, obs_keys=None, done_when_success=False,
         env = DoneOnSuccessWrapper(env, reward_offset=1.0)
     env = ScaleRewardWrapper(env, reward_scale=reward_scale)
     if log_dir is not None:
-        env = Monitor(env, os.path.join(log_dir, "%d.monitor.csv" % rank), info_keywords=("is_success",))
+        env = Monitor(env, os.path.join(log_dir, "%d.monitor.csv" % rank), info_keywords=info_keywords)
     return env
 
 
