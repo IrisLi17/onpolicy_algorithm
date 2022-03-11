@@ -8,6 +8,11 @@ config = dict(
         obs_keys=["vision", "joints", "inertial"],
         reward_scale=1.0,
         info_keywords=(),
+        kwargs=dict(
+            reward_speed_coef=1.0,
+            reward_z_coef=0.1,
+            reward_survive_coef=0.5,
+        ),
     ),
     policy_type=("policies.unitree_robot_policy", "MultiModalPolicy"),
     policy=dict(
