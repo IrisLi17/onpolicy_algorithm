@@ -11,9 +11,9 @@ except:
     sys.path.append("../panda-gym")
     import panda_gym
 import sys
-sys.path.append("../unitree_pybullet")
-import gym_env
-sys.path.remove("../unitree_pybullet")
+sys.path.append("../motion_imitation")
+import envs
+sys.path.remove("../motion_imitation")
 
 
 def make_env(env_id, rank, log_dir=None, obs_keys=None, done_when_success=False, reward_scale=1.0,
