@@ -27,6 +27,7 @@ class MultiModalPolicy(ActorCriticPolicy):
             nn.Linear(128, 128), nn.ReLU(),
         )
         self.pi_mean = nn.Sequential(
+            nn.LayerNorm(image_feature_dim + 128),
             nn.Linear(image_feature_dim + 128, 64), nn.ReLU(),
             nn.Linear(64, action_dim),
         )
@@ -36,9 +37,19 @@ class MultiModalPolicy(ActorCriticPolicy):
             nn.Linear(128, 128), nn.ReLU(),
         )
         self.vf_linears = nn.Sequential(
+            nn.LayerNorm(image_feature_dim + 128),
             nn.Linear(image_feature_dim + 128, 64), nn.ReLU(),
             nn.Linear(64, 1),
         )
+        self._initialize()
+
+    def _initialize(self):
+        for net in self.vf_linears:
+            if isinstance(net, nn.Linear):
+                nn.init.orthogonal_(net.weight, gain=np.sqrt(2))
+                nn.init.constant_(net.bias, 0.)
+        nn.init.orthogonal_(self.pi_mean[-1].weight, gain=0.01)
+        nn.init.constant_(self.pi_mean[-1].bias, 0.)
 
     def forward(self, obs, rnn_hxs=None, rnn_masks=None, forward_vf=True):
         image_obs = torch.narrow(obs, dim=-1, start=0, length=int(np.prod(self.image_shape)))
