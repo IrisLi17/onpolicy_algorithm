@@ -8,6 +8,7 @@ config = dict(
         obs_keys=["HistoricSensorWrapper(IMU)", "HistoricSensorWrapper(LastAction)",
                   "HistoricSensorWrapper(MotorAngle)"],
         reward_scale=1.0,
+        scale_action=True,
         info_keywords=(),
         kwargs=dict(),
     ),
@@ -20,6 +21,6 @@ config = dict(
         noptepochs=4,
         n_steps=1024,
         learning_rate=1e-4,
-        use_wandb=False,
+        use_wandb=True,
     ),
 )

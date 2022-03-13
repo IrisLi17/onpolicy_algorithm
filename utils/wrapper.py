@@ -134,6 +134,17 @@ class FlattenDictWrapper(FlattenDictWrapperOld):
         return self.ravel_dict_observation(observation, self.dict_keys)
 
 
+class ScaleActionWrapper(gym.Wrapper):
+    def __init__(self, env):
+        super(ScaleActionWrapper, self).__init__(env)
+
+    def step(self, action: np.ndarray):
+        action = np.clip(action, -1, 1)
+        action = (self.env.action_space.low + self.env.action_space.high) / 2 \
+                 + (self.env.action_space.high - self.env.action_space.low) / 2 * action
+        return self.env.step(action)
+
+
 class VecPyTorch(VecEnvWrapper):
     def __init__(self, venv, device):
         """Return only every `skip`-th frame"""

@@ -1,15 +1,15 @@
 import os
 import gym
-from utils.wrapper import DoneOnSuccessWrapper, VecPyTorch, ScaleRewardWrapper, FlattenDictWrapper
+from utils.wrapper import DoneOnSuccessWrapper, VecPyTorch, ScaleRewardWrapper, FlattenDictWrapper, ScaleActionWrapper
 from utils.monitor import Monitor
 from vec_env.subproc_vec_env import SubprocVecEnv
 import torch
-try:
-    import panda_gym
-except:
-    import sys
-    sys.path.append("../panda-gym")
-    import panda_gym
+# try:
+#     import panda_gym
+# except ImportError:
+#     import sys
+#     sys.path.append("../panda-gym")
+#     import panda_gym
 import sys
 sys.path.append("../motion_imitation")
 import envs
@@ -17,12 +17,14 @@ sys.path.remove("../motion_imitation")
 
 
 def make_env(env_id, rank, log_dir=None, obs_keys=None, done_when_success=False, reward_scale=1.0,
-             info_keywords=("is_success",), kwargs={}):
+             scale_action=False, info_keywords=("is_success",), kwargs={}):
     env = gym.make(env_id, **kwargs)
     if obs_keys is not None and isinstance(obs_keys, list):
         env = FlattenDictWrapper(env, obs_keys)
     if done_when_success:
         env = DoneOnSuccessWrapper(env, reward_offset=1.0)
+    if scale_action:
+        env = ScaleActionWrapper(env)
     env = ScaleRewardWrapper(env, reward_scale=reward_scale)
     if log_dir is not None:
         env = Monitor(env, os.path.join(log_dir, "%d.monitor.csv" % rank), info_keywords=info_keywords)
