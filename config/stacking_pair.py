@@ -42,7 +42,7 @@ config = dict(
         pred_rew_coef=0.5,
         bc_ent_coef=0.01,
         reduction_strategy="fixed_interval",
-        data_interval=1,
+        data_interval=10,
         n_steps=1024 * 4,
         tr_kwargs=dict(multi_height=True),
         log_prob_clip_min=-4 * 3.5,

@@ -149,7 +149,7 @@ class PAIR(object):
             if self.task_reduction and self.data_strategy == "fixed_interval":
                 if (not start_reduction) and start_reduction_condition():
                     start_reduction = True
-                    last_reduce_time = j
+                    last_reduce_time = j - (self.data_interval - 1)
                 if start_reduction and j - last_reduce_time >= self.data_interval:
                     last_reduce_time = j
             # '''
