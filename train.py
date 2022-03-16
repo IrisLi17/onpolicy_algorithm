@@ -1,7 +1,7 @@
 import importlib
 
 import torch, os
-from utils.make_env import make_vec_env, ObsParser
+from utils.make_env import make_vec_env, ObsParser, StackingObsParser
 from policies.attention_discrete import AttentionDiscretePolicy
 import argparse
 from utils import logger
@@ -11,7 +11,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--config", type=str)
     parser.add_argument("--play", action="store_true", default=False)
-    parser.add_argument("--load_path", type=str)
+    parser.add_argument("--load_path", type=str, default=None)
     args = parser.parse_args()
     return args
 
@@ -36,7 +36,7 @@ def main():
                        **config["create_env_kwargs"])
     if config["policy_type"] == "attention_discrete":
         # implement obs_parser
-        obs_parser = ObsParser(**config["obs_parser"])
+        obs_parser = StackingObsParser(**config["obs_parser"])
         policy = AttentionDiscretePolicy(obs_parser, env.action_space.shape[0], **config["policy"])
     elif config["policy_type"] == "attention_gaussian":
         obs_parser = ObsParser(**config["obs_parser"])
@@ -58,6 +58,8 @@ def main():
         from onpolicy import PAIR
         eval_env = make_vec_env(config["env_id"], 20, device, **config["create_env_kwargs"])
         model = PAIR(env, policy, device=device, eval_env=eval_env, **config.get("train", {}))
+    else:
+        raise NotImplementedError
 
     def callback(locals, globals):
         if locals["j"] % 50 == 0:
@@ -65,6 +67,9 @@ def main():
 
     logger.log(config)
     if not args.play:
+        if args.load_path is not None:
+            model.load(args.load_path, eval=False)
+            print("loaded", args.load_path)
         model.learn(config["total_timesteps"], callback)
     else:
         model.load(args.load_path, eval=True)

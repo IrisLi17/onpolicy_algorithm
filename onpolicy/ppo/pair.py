@@ -6,6 +6,7 @@ import torch.optim as optim
 from utils import logger
 from vec_env.base_vec_env import VecEnv
 from onpolicy.storage import RolloutStorage, compute_gae_return_multi
+from policies.base import ActorCriticPolicy
 from collections import deque
 import numpy as np
 from typing import List, Dict
@@ -14,13 +15,13 @@ import pickle
 
 
 class PAIR(object):
-    def __init__(self, env, policy: nn.Module, reduction_env=None, device="cpu", n_steps=1024, nminibatches=32,
+    def __init__(self, env, policy: ActorCriticPolicy, reduction_env=None, device="cpu", n_steps=1024, nminibatches=32,
                  noptepochs=10, gamma=0.99, lam=0.95, learning_rate=2.5e-4, cliprange=0.2, ent_coef=0.01, vf_coef=0.5,
                  max_grad_norm=0.5, eps=1e-5, use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False,
                  il_coef=1, task_reduction=False, reduction_strategy="fixed_interval", bc_ent_coef=0,
-                 keep_success_ratio=0.1, debug=False, pred_rew_coef=0.5,
-                 il_weighted=True, sil=False, relabel=False, data_interval=10, eval_env=None,
-                 off_value_coef=0):
+                 keep_success_ratio=0.1, pred_rew_coef=0.5, il_weighted=True, sil=False, relabel=False,
+                 data_interval=10, eval_env=None, off_value_coef=0, tr_kwargs={}, log_prob_clip_min=-np.inf,
+                 log_prob_clip_max=np.inf):
         self.env = env
         self.policy = policy
         self.device = device
@@ -62,7 +63,7 @@ class PAIR(object):
             from onpolicy.ppo.task_reduction import TaskReduction
             self.task_reducer = TaskReduction(
                 _reduction_env, self.policy, keep_success_ratio=keep_success_ratio,
-                debug=debug, success_predictor=None, env_kwargs={}
+                env_kwargs=tr_kwargs
             )
         self.data_interval = data_interval
         self.sil = sil
@@ -81,15 +82,19 @@ class PAIR(object):
         self.pred_rew_coef = pred_rew_coef
         self.il_weighted = il_weighted
 
-        self.log_prob_clip_min = -np.inf
-        self.log_prob_clip_max = np.inf
+        self.log_prob_clip_min = log_prob_clip_min
+        self.log_prob_clip_max = log_prob_clip_max
         self._check_env()
 
     def _check_env(self):
         if self.relabel or self.task_reduction:
             goal = self.env.get_attr("goal")
-        if self.task_reduction:
-            state = self.env.env_method("get_state")
+            if self.task_reduction:
+                # todo: incomplete check list of required api
+                state = self.env.env_method("get_state")
+                self.env.env_method("set_state", state[0])
+                self.env.env_method("get_obs")
+            self.env.reset()
 
     def learn(self, total_timesteps, callback=None):
         episode_rewards = deque(maxlen=1000)
@@ -117,6 +122,12 @@ class PAIR(object):
         if self.env_id == "BulletStack-v1":
             last_reduce_time = np.inf
         start_reduction = False
+
+        def start_reduction_condition():
+            if self.env_id == "BulletStack-v1":
+                return current_n_to_stack >= 2
+            return True
+
         self.num_timesteps = 0
 
         start = time.time()
@@ -125,18 +136,21 @@ class PAIR(object):
         for j in range(num_updates):
             # curriculum on current_n_to_stack
             # curriculum_callback(locals(), globals())
-            # if self.env_id == "BulletStack-v1":
-            #     threshold = min(0.8, 1 - 1 / (self.env.get_attr("n_object")[0] + 1 - current_n_to_stack))
-            #     if success_rate > 0.6 \
-            #             and np.mean(detailed_stats[current_n_to_stack - 1]) > threshold \
-            #             and ((current_n_to_stack == 1 and self.env.get_attr("cl_ratio")[0] == 0) or
-            #                  1 < current_n_to_stack < self.env.get_attr("n_object")[0]):
-            #         current_n_to_stack += 1
-            #         self.env.env_method("set_choice_prob", [current_n_to_stack], [0.7])
+            if self.env_id == "BulletStack-v1":
+                success_rate = safe_mean([ep_info["r"] for ep_info in ep_infos])
+                threshold = min(0.8, 1 - 1 / (self.env.get_attr("n_object")[0] + 1 - current_n_to_stack))
+                if success_rate > 0.6 \
+                        and np.mean(detailed_stats[current_n_to_stack - 1]) > threshold \
+                        and ((current_n_to_stack == 1 and self.env.get_attr("cl_ratio")[0] == 0) or
+                             1 < current_n_to_stack < self.env.get_attr("n_object")[0]):
+                    current_n_to_stack += 1
+                    self.env.env_method("set_choice_prob", [current_n_to_stack], [0.7])
             # in some condition, try task reduction, and imitation
-            if self.data_strategy == "fixed_interval":
-                start_reduction = True
-                if j - last_reduce_time >= self.data_interval:
+            if self.task_reduction and self.data_strategy == "fixed_interval":
+                if (not start_reduction) and start_reduction_condition():
+                    start_reduction = True
+                    last_reduce_time = j
+                if start_reduction and j - last_reduce_time >= self.data_interval:
                     last_reduce_time = j
             # '''
 
@@ -180,6 +194,9 @@ class PAIR(object):
                     if maybe_ep_info is not None:
                         ep_infos.append(maybe_ep_info)
                         episode_rewards.append(maybe_ep_info['r'])
+                        if self.env_id == "BulletStack-v1":
+                            n_to_stack = info["n_to_stack"]
+                            detailed_stats[n_to_stack - 1].append(info["is_success"])
                         if info["is_success"]:
                             # store successful data for SIL and partially for task reduction
                             if self.sil or self.task_reduction:
@@ -302,6 +319,10 @@ class PAIR(object):
                         logger.logkv(key, safe_mean([ep_info[key] for ep_info in ep_infos]))
                 # if "is_success" in ep_infos[0]:
                 #     logger.logkv('success_rate', safe_mean([ep_info['is_success'] for ep_info in ep_infos]))
+            if self.env_id == "BulletStack-v1":
+                for i in range(len(detailed_stats)):
+                    logger.logkv("eval_stack_%d" % (i + 1), safe_mean(detailed_stats[i]))
+                logger.logkv("current_n_to_stack", current_n_to_stack)
             logger.logkv('time_elapsed', time.time() - start)
             for loss_name in losses.keys():
                 logger.logkv(loss_name, losses[loss_name])

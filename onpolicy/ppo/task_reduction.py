@@ -1,25 +1,16 @@
-from torch_algorithms.policies.attention_discrete import AttentionDiscretePolicy
-from torch_algorithms.awac.discrete_policy import MultiDiscreteActor
-from torch_algorithms.awac.continuous_policy import MlpGaussianActor
-from torch_algorithms.sac.policy import Critic
+from policies.base import ActorCriticPolicy
 import torch
 import numpy as np
-from typing import List, Tuple
-from utils.generate_demo import relabel_obs
-from torch_algorithms import logger
-import pickle
+from utils import logger
 
 
 class TaskReduction(object):
-    def __init__(self, env, policy: AttentionDiscretePolicy, critic=None, keep_success_ratio=0.1, multi_height=False,
-                 debug=False, success_predictor=None):
+    def __init__(self, env, policy: ActorCriticPolicy, keep_success_ratio=0.1, env_kwargs={}):
         self.env = env
         self.policy = policy
         for p in self.policy.parameters():
             self.device = p.data.device
             break
-        self.critic = critic
-        self.success_predictor = success_predictor
         self.env_id = self.env.get_attr("spec")[0].id
         if self.env_id == "BulletStack-v1":
             self.x_workspace = self.env.get_attr("robot")[0].x_workspace
@@ -37,54 +28,25 @@ class TaskReduction(object):
         self.goal_dim = self.env.get_attr("goal")[0].shape[0]
 
         self.keep_success_ratio = keep_success_ratio
-        self.multi_height = multi_height
-        self.debug = debug
+        self.env_kwargs = env_kwargs
 
     def _act(self, obs, deterministic):
-        if isinstance(self.policy, MultiDiscreteActor) or isinstance(self.policy, MlpGaussianActor):
-            actions = self.policy.act(obs, deterministic)
-            log_probs = self.policy.evaluate_actions(obs, actions)
-            values = self.critic(obs, actions)
-            return values, actions, log_probs
-        else:
-            values, actions, log_probs, _ = self.policy.act(obs, deterministic)
-            return values, actions, log_probs
+        values, actions, log_probs, _ = self.policy.act(obs, deterministic)
+        return values, actions, log_probs
 
     def _evaluate_actions(self, obs, actions):
-        if isinstance(self.policy, MultiDiscreteActor) or isinstance(self.policy, MlpGaussianActor):
-            action_log_probs = self.policy.evaluate_actions(obs, actions)
-            return action_log_probs
-        else:
-            action_log_probs, _, _ = self.policy.evaluate_actions(obs, None, None, actions)
-            return action_log_probs
+        action_log_probs, _, _ = self.policy.evaluate_actions(obs, None, None, actions)
+        return action_log_probs
 
     def _get_value(self, obs):
-        if isinstance(self.success_predictor, list) and isinstance(self.success_predictor[0], torch.nn.Module):
-            values = self.success_predictor[0].predict_without_action(obs, None, None)
-            return values
-        if isinstance(self.policy, MultiDiscreteActor) or isinstance(self.policy, MlpGaussianActor):
-            actions = self.policy.act(obs, deterministic=True)
-            values = self.critic(obs, actions)
-            return values
-        else:
-            values = self.policy.get_value(obs, None, None)
-            return values
+        values = self.policy.get_value(obs, None, None)
+        return values
 
     def reduction(self, n_desired_traj, manual_subgoal=False, return_terminal_obs=False):
         obs = self.env.reset()
         # initial_states = self.env.env_method("get_state")
         is_reduction = [False] * self.env.num_envs
-        buffer = [dict(obs=[], actions=[], states=[], values=[], preds=[], tag="") for _ in range(self.env.num_envs)]
-        if self.debug:
-            debug_origin_images = [[] for _ in range(self.env.num_envs)]
-            debug_reduction_images = [[] for _ in range(self.env.num_envs)]
-            debug_origin_logps = [None for _ in range(self.env.num_envs)]
-            debug_reduction_logps = [None for _ in range(self.env.num_envs)]
-            debug_origin_values = [[] for _ in range(self.env.num_envs)]
-            debug_reduction_values = [[] for _ in range(self.env.num_envs)]
-            import os
-            os.system("rm debug_success*.pkl")
-            os.system("rm debug_fail*.pkl")
+        buffer = [dict(obs=[], actions=[], states=[], values=[], tag="") for _ in range(self.env.num_envs)]
         dataset = []
         failed_dataset = []
         n_total_traj = 0
@@ -111,15 +73,6 @@ class TaskReduction(object):
             states = self.env.env_method("get_state")
             with torch.no_grad():
                 values, actions, log_probs = self._act(obs, deterministic=False)
-            if isinstance(self.success_predictor, list) and isinstance(self.success_predictor[0], torch.nn.Module):
-                predictions = []
-                for i in range(len(self.success_predictor)):
-                    predictions.append(self.success_predictor[i].predict_without_action(obs, None, None).detach())
-                predictions = torch.min(torch.stack(predictions, dim=0), dim=0)[0]
-            else:
-                predictions = None
-            if self.debug:
-                images = self.env.get_images()
             new_obs, rewards, dones, infos = self.env.step(actions)
             n_interactions += self.env.num_envs
             for e_idx in range(self.env.num_envs):
@@ -127,25 +80,10 @@ class TaskReduction(object):
                 buffer[e_idx]["actions"].append(actions[e_idx])
                 buffer[e_idx]["states"].append(states[e_idx])
                 buffer[e_idx]["values"].append(values[e_idx].cpu().numpy())
-                if self.success_predictor is not None:
-                    buffer[e_idx]["preds"].append(predictions[e_idx].cpu().numpy())
-                if self.debug:
-                    if is_reduction[e_idx]:
-                        debug_reduction_images[e_idx].append(images[e_idx])
-                        debug_reduction_values[e_idx].append(values[e_idx].cpu().numpy())
-                    else:
-                        debug_origin_images[e_idx].append(images[e_idx])
-                        debug_origin_values[e_idx].append(values[e_idx].cpu().numpy())
                 if dones[e_idx]:
                     n_total_traj += 1
                     ultimate_goal = infos[e_idx]["terminal_observation"][-self.goal_dim:]
                     if not is_reduction[e_idx] and not infos[e_idx]["is_success"]:
-                        if self.debug:
-                            with torch.no_grad():
-                                action_log_probs = self._evaluate_actions(
-                                    torch.stack(buffer[e_idx]["obs"], dim=0),
-                                    torch.stack(buffer[e_idx]["actions"], dim=0))
-                            debug_origin_logps[e_idx] = action_log_probs.cpu().numpy()
                         _n_need_reduction += 1
                         # need reduction
                         is_reduction[e_idx] = True
@@ -156,10 +94,7 @@ class TaskReduction(object):
                                                         ultimate_goal)
                         if subgoal is None:
                             is_reduction[e_idx] = False
-                            buffer[e_idx] = dict(obs=[], actions=[], states=[], values=[], preds=[], tag="")
-                            if self.debug:
-                                debug_origin_images[e_idx] = []
-                                debug_origin_values[e_idx] = []
+                            buffer[e_idx] = dict(obs=[], actions=[], states=[], values=[], tag="")
                             continue
                         # for debugging only
                         if manual_subgoal:
@@ -190,29 +125,6 @@ class TaskReduction(object):
                         buffer[e_idx]["tag"] = "reduction"
                         dataset.append(buffer[e_idx])
                         is_reduction[e_idx] = False
-                        if self.debug:
-                            with torch.no_grad():
-                                action_log_probs = self._evaluate_actions(
-                                    torch.from_numpy(buffer[e_idx]["obs"]).to(self.device),
-                                    torch.from_numpy(buffer[e_idx]["actions"]).to(self.device))
-                                relabeled_values = self._get_value(
-                                    torch.from_numpy(buffer[e_idx]["obs"]).to(self.device)
-                                )
-                            debug_reduction_logps[e_idx] = action_log_probs.cpu().numpy()
-                            debug_reduction_values[e_idx] = relabeled_values.cpu().numpy()
-                            if _n_reduction_success < 10:
-                                with open("debug_success_reduction_images%d.pkl" % _n_reduction_success, "wb") as f:
-                                    pickle.dump(
-                                        dict(images=debug_origin_images[e_idx] + debug_reduction_images[e_idx],
-                                             n_to_stack=infos[e_idx]["n_to_stack"], n_base=infos[e_idx]["n_base"],
-                                             logp=np.concatenate([debug_origin_logps[e_idx],
-                                                                  debug_reduction_logps[e_idx]], axis=0),
-                                             values=np.concatenate([np.array(debug_origin_values[e_idx]), debug_reduction_values[e_idx]], axis=0)),
-                                        f)
-                            debug_origin_images[e_idx] = []
-                            debug_reduction_images[e_idx] = []
-                            debug_origin_values[e_idx] = []
-                            debug_reduction_values[e_idx] = []
                     elif not is_reduction[e_idx] and infos[e_idx]["is_success"]:
                         if _n_original_success < self.keep_success_ratio * len(dataset):
                             if return_terminal_obs:
@@ -224,13 +136,10 @@ class TaskReduction(object):
                             buffer[e_idx]["tag"] = "origin"
                             dataset.append(buffer[e_idx])
                             _n_original_success += 1
-                        if self.debug:
-                            debug_origin_images[e_idx] = []
-                            debug_origin_values[e_idx] = []
                     elif is_reduction[e_idx] and not infos[e_idx]["is_success"]:
                         _n_reduction_fail += 1
                         _step_reduction_fail += len(buffer[e_idx]["obs"])
-                        if len(failed_dataset) < len(dataset) or self.debug:
+                        if len(failed_dataset) < len(dataset):
                             if return_terminal_obs:
                                 buffer[e_idx]["obs"].append(
                                     torch.from_numpy(infos[e_idx]["terminal_observation"]).float().to(self.device)
@@ -241,23 +150,7 @@ class TaskReduction(object):
                         if len(failed_dataset) < len(dataset):
                             failed_dataset.append(buffer[e_idx])
                         is_reduction[e_idx] = False
-                        if self.debug:
-                            if _n_reduction_fail < 10:
-                                with torch.no_grad():
-                                    relabeled_values = self._get_value(
-                                        torch.from_numpy(buffer[e_idx]["obs"]).to(self.device)
-                                    )
-                                debug_reduction_values[e_idx] = relabeled_values.cpu().numpy()
-                                with open("debug_fail_reduction_images%d.pkl" % _n_reduction_fail, "wb") as f:
-                                    pickle.dump(
-                                        dict(images=debug_origin_images[e_idx] + debug_reduction_images[e_idx],
-                                             n_to_stack=infos[e_idx]["n_to_stack"], n_base=infos[e_idx]["n_base"],
-                                             values=np.concatenate([np.array(debug_origin_values[e_idx]), debug_reduction_values[e_idx]], axis=0)), f)
-                            debug_origin_images[e_idx] = []
-                            debug_reduction_images[e_idx] = []
-                            debug_origin_values[e_idx] = []
-                            debug_reduction_values[e_idx] = []
-                    buffer[e_idx] = dict(obs=[], actions=[], states=[], values=[], preds=[], tag="")
+                    buffer[e_idx] = dict(obs=[], actions=[], states=[], values=[], tag="")
                     # initial_states[e_idx] = self.env.env_method("get_state", indices=e_idx)[0]
             obs = new_obs
         return dataset, n_interactions, failed_dataset, _step_reduction_success / (_step_reduction_success + _step_reduction_fail)
@@ -291,7 +184,7 @@ class TaskReduction(object):
             subgoals = np.zeros((1024, goal.shape[0]))
             subgoals[np.arange(1024), 3 + subgoal_idx] = 1
             # generate goal position
-            if self.multi_height:
+            if self.env_kwargs["multi_height"]:
                 # loosen the constraint on sub-goal height
                 goal_positions = np.stack([
                     np.random.uniform(*self.x_workspace, size=1024),
@@ -368,7 +261,7 @@ class TaskReduction(object):
         n_valid_transition = 0
         is_running = [False] * self.env.num_envs
         dataset = []
-        storage = [dict(obs=[], actions=[], tag="") for _ in range(self.env.num_envs)]
+        storage = [dict(obs=[], actions=[], reward=np.empty(0), tag="") for _ in range(self.env.num_envs)]
         if len(goal_seqs) == 0:
             return dataset, n_interactions
         self.env.dispatch_env_method("set_goals", *(goal_seqs[:min(self.env.num_envs, len(goal_seqs))]),
@@ -378,7 +271,7 @@ class TaskReduction(object):
         if self.env_id == "BulletStack-v1":
             self.env.env_method("sync_attr", indices=list(range(min(self.env.num_envs, len(initial_states)))))
         # todo: get obs
-        obs = dict2tensor(self.env.env_method("get_obs"), self.device).float()
+        obs = self.env.get_obs()
         n_used_traj += min(self.env.num_envs, len(goal_seqs))
         is_running[:min(self.env.num_envs, len(goal_seqs))] = [True] * min(self.env.num_envs, len(goal_seqs))
         while np.any(is_running):
@@ -397,18 +290,21 @@ class TaskReduction(object):
                         )
                         storage[e_idx]["obs"] = torch.stack(storage[e_idx]["obs"], dim=0).cpu().numpy()
                         storage[e_idx]["actions"] = torch.stack(storage[e_idx]["actions"], dim=0).cpu().numpy()
+                        _rewards = np.zeros(len(storage[e_idx]["actions"]))
+                        _rewards[-1] = 1.0
+                        storage[e_idx]["reward"] = _rewards
                         storage[e_idx]["tag"] = "reduction"
                         dataset.append(storage[e_idx])
                         n_valid_transition += len(storage[e_idx]["obs"])
                         if n_valid_transition >= max_size:
                             return dataset, n_interactions
-                    storage[e_idx] = dict(obs=[], actions=[], tag="")
+                    storage[e_idx] = dict(obs=[], actions=[], reward=np.empty(0), tag="")
                     if n_used_traj < len(initial_states):
                         self.env.env_method("set_goals", goal_seqs[n_used_traj], indices=e_idx)
                         self.env.env_method("set_state", initial_states[n_used_traj], indices=e_idx)
                         if self.env_id == "BulletStack-v1":
                             self.env.env_method("sync_attr", indices=e_idx)
-                        new_obs[e_idx] = dict2tensor(self.env.env_method("get_obs", indices=e_idx), self.device)[0].float()
+                        new_obs[e_idx] = self.env.get_obs()[e_idx]
                         n_used_traj += 1
                     else:
                         is_running[e_idx] = False
@@ -495,3 +391,25 @@ def select_reduction_idx(values: list):
             max(np.argmax(value_diff) - 4, 0), min(np.argmax(value_diff) + 5, len(traj_value))
         )
     return reduction_start_idx
+
+
+def relabel_obs(env, obs_seq, goal):
+    assert isinstance(obs_seq, list)
+    env_id = env.get_attr("spec")[0].id
+    if env_id == "BulletStack-v1":
+        robot_dim = env.get_attr("robot_dim")[0]
+        object_dim = env.get_attr("object_dim")[0]
+        goal_dim = env.get_attr("goal")[0].shape[0]
+        goal_idx = torch.argmax(goal[3:])
+        for obs in obs_seq:
+            goal_indicator_idx = torch.from_numpy(np.arange(robot_dim + object_dim - 1, obs.shape[0] - 2 * goal_dim, object_dim, dtype=np.long))
+            obs[goal_indicator_idx] = 0.
+            obs[robot_dim + goal_idx * object_dim + object_dim - 1] = 1.
+            obs[-2 * goal_dim: -2 * goal_dim + 3] = \
+                obs[robot_dim + goal_idx * object_dim: robot_dim + goal_idx * object_dim + 3]
+            obs[-2 * goal_dim + 3: -goal_dim] = goal[3:]
+            obs[-goal_dim:] = goal[:]
+    else:
+        goal_dim = env.get_attr("goal")[0].shape[0]
+        for obs in obs_seq:
+            obs[-goal_dim:] = goal

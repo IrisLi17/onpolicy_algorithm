@@ -4,25 +4,42 @@ from utils.wrapper import DoneOnSuccessWrapper, VecPyTorch, ScaleRewardWrapper, 
 from utils.monitor import Monitor
 from vec_env.subproc_vec_env import SubprocVecEnv
 import torch
+import sys
 # try:
 #     import panda_gym
 # except ImportError:
 #     import sys
 #     sys.path.append("../panda-gym")
 #     import panda_gym
-import sys
-sys.path.append("../motion_imitation")
-import envs
-sys.path.remove("../motion_imitation")
+try:
+    sys.path.append("../motion_imitation")
+    import envs
+    sys.path.remove("../motion_imitation")
+except:
+    pass
+
+try:
+    sys.path.append("../stacking_env")
+    import env
+    sys.path.remove("../stacking_env")
+except:
+    pass
 
 
-def make_env(env_id, rank, log_dir=None, obs_keys=None, done_when_success=False, reward_scale=1.0,
-             scale_action=False, info_keywords=("is_success",), kwargs={}):
+def make_env(env_id, rank, log_dir=None, obs_keys=None, done_when_success=False, reward_offset=1.0, reward_scale=1.0,
+             flexible_time_limit=False, allow_switch_goal=False, scale_action=False, info_keywords=("is_success",),
+             kwargs={}):
     env = gym.make(env_id, **kwargs)
+    if flexible_time_limit:
+        from utils.wrapper import FlexibleTimeLimitWrapper
+        env = FlexibleTimeLimitWrapper(env)
     if obs_keys is not None and isinstance(obs_keys, list):
         env = FlattenDictWrapper(env, obs_keys)
     if done_when_success:
-        env = DoneOnSuccessWrapper(env, reward_offset=1.0)
+        env = DoneOnSuccessWrapper(env, reward_offset=reward_offset)
+    if allow_switch_goal:
+        from utils.wrapper import SwitchGoalWrapper
+        env = SwitchGoalWrapper(env)
     if scale_action:
         env = ScaleActionWrapper(env)
     env = ScaleRewardWrapper(env, reward_scale=reward_scale)
@@ -59,3 +76,30 @@ class ObsParser(object):
         objects_obs = torch.cat([objects_obs, desired_goals], dim=-1)
         masks = torch.norm(objects_obs, dim=-1) < 1e-3
         return robot_obs, objects_obs, masks
+
+
+class StackingObsParser(object):
+    def __init__(self, robot_dim, obj_dim, goal_dim):
+        self.robot_dim = robot_dim + 6
+        self.arm_dim = robot_dim
+        self.obj_dim = obj_dim
+        self.goal_dim = goal_dim
+
+    def forward(self, obs: torch.Tensor):
+        assert isinstance(obs, torch.Tensor)
+        assert len(obs.shape) == 2
+        # robot_dim = env.get_attr("robot_dim")[0]
+        # object_dim = env.get_attr("object_dim")[0]
+        # goal_dim = env.get_attr("goal")[0].shape[0]
+        robot_obs = torch.narrow(obs, dim=1, start=0, length=self.arm_dim)
+        achieved_obs = torch.narrow(obs, dim=1, start=obs.shape[1] - 2 * self.goal_dim, length=3)
+        goal_obs = torch.narrow(obs, dim=1, start=obs.shape[1] - self.goal_dim, length=3)
+        robot_obs = torch.cat([robot_obs, achieved_obs, goal_obs], dim=-1)
+        objects_obs = torch.narrow(obs, dim=1, start=self.arm_dim,
+                                   length=obs.shape[1] - self.arm_dim - 2 * self.goal_dim)
+        objects_obs = torch.reshape(objects_obs, (objects_obs.shape[0], -1, self.obj_dim))
+        masks = torch.norm(objects_obs + 1, dim=-1) < 1e-3
+        # print("robot obs", robot_obs, "objects obs", objects_obs, "masks", masks)
+        # exit()
+        return robot_obs, objects_obs, masks
+

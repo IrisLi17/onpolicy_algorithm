@@ -1,0 +1,50 @@
+config = dict(
+    env_id="BulletStack-v1",
+    num_workers=64,
+    algo="pair",
+    name="test",
+    total_timesteps=int(2e8),
+    create_env_kwargs=dict(
+        obs_keys=["observation", "achieved_goal", "desired_goal"],
+        flexible_time_limit=True,
+        allow_switch_goal=True,
+        done_when_success=True,
+        reward_offset=0.0,
+        reward_scale=1,
+        kwargs=dict(
+            n_object=6,
+            n_to_stack=[1, 2, 3, 4, 5, 6],
+            reward_type="sparse",
+        ),
+    ),
+    policy_type="attention_discrete",
+    obs_parser=dict(
+        robot_dim=11,
+        obj_dim=16,
+        goal_dim=3 + 6,
+    ),
+    policy=dict(
+        hidden_size=64,
+        num_bin=21,
+        feature_extractor="self_attention",
+        shared=False,
+        n_critic_layers=1,
+        n_actor_layers=1,
+        kwargs=dict(
+            n_attention_blocks=2,
+            n_heads=1,
+        ),
+    ),
+    train=dict(
+        sil=True,
+        relabel=False,
+        task_reduction=True,
+        pred_rew_coef=0.5,
+        bc_ent_coef=0.01,
+        reduction_strategy="fixed_interval",
+        data_interval=1,
+        n_steps=1024 * 4,
+        tr_kwargs=dict(multi_height=True),
+        log_prob_clip_min=-4 * 3.5,
+    )
+)
