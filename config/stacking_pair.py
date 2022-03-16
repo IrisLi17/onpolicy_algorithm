@@ -2,7 +2,7 @@ config = dict(
     env_id="BulletStack-v1",
     num_workers=64,
     algo="pair",
-    name="test",
+    name="pair_interval20",
     total_timesteps=int(2e8),
     create_env_kwargs=dict(
         obs_keys=["observation", "achieved_goal", "desired_goal"],
@@ -42,7 +42,7 @@ config = dict(
         pred_rew_coef=0.5,
         bc_ent_coef=0.01,
         reduction_strategy="fixed_interval",
-        data_interval=10,
+        data_interval=20,
         n_steps=1024 * 4,
         tr_kwargs=dict(multi_height=True),
         log_prob_clip_min=-4 * 3.5,
