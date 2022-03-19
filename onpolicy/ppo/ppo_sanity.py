@@ -233,9 +233,9 @@ class PPO(object):
     def save(self, save_path):
         save_dict = {'policy': self.policy.state_dict(),
                      'optimizer': self.optimizer.state_dict()}
-        from vec_env.vec_normalize import VecNormalize
-        if isinstance(self.env, VecNormalize):
+        if hasattr(self.env, "obs_rms"):
             save_dict["obs_rms"] = self.env.obs_rms
+        if hasattr(self.env, "ret_rms"):
             save_dict["ret_rms"] = self.env.ret_rms
         torch.save(save_dict, save_path)
 
@@ -246,9 +246,9 @@ class PPO(object):
             self.optimizer.load_state_dict(checkpoint['optimizer'])
         except:
             pass
-        from vec_env.vec_normalize import VecNormalize
-        if isinstance(self.env, VecNormalize):
+        if hasattr(self.env, "obs_rms"):
             self.env.obs_rms = checkpoint["obs_rms"]
+        if hasattr(self.env, "ret_rms"):
             self.env.ret_rms = checkpoint["ret_rms"]
         if eval:
             self.policy.eval()
