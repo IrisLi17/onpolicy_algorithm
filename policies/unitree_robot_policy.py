@@ -53,7 +53,8 @@ class MultiModalPolicy(ActorCriticPolicy):
 
     def forward(self, obs, rnn_hxs=None, rnn_masks=None, forward_vf=True):
         image_obs = torch.narrow(obs, dim=-1, start=0, length=int(np.prod(self.image_shape)))
-        image_obs = torch.reshape(image_obs, [-1] + list(self.image_shape))
+        # image_obs = torch.reshape(image_obs, [-1] + list(self.image_shape))
+        image_obs = torch.reshape(image_obs, [-1, self.image_shape[1], self.image_shape[2], self.image_shape[0]]).permute(0, 3, 1, 2)
         state_obs = torch.narrow(obs, dim=-1, start=int(np.prod(self.image_shape)), length=self.state_shape)
         image_feature = self.image_encoder(image_obs)
         pi_state_feature = self.pi_state_encoder(state_obs)
