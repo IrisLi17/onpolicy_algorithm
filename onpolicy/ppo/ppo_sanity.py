@@ -247,9 +247,11 @@ class PPO(object):
         except:
             pass
         if hasattr(self.env, "obs_rms"):
-            self.env.obs_rms = checkpoint["obs_rms"]
-        if hasattr(self.env, "ret_rms"):
-            self.env.ret_rms = checkpoint["ret_rms"]
+            self.env.venv.obs_rms.mean = checkpoint["obs_rms"].mean
+            self.env.venv.obs_rms.var = checkpoint["obs_rms"].var
+        # if hasattr(self.env, "ret_rms"):
+        #     self.env.venv.set_attr("ret_rms", checkpoint["ret_rms"])
+        #     print(self.env.ret_rms)
         if eval:
             self.policy.eval()
         else:

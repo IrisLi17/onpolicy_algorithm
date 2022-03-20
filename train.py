@@ -33,7 +33,7 @@ def main():
     if args.play:
         config["num_workers"] = 1
     env = make_vec_env(config["env_id"], config["num_workers"], device, log_dir=config["log_dir"],
-                       **config["create_env_kwargs"])
+                       training=(not args.play), **config["create_env_kwargs"])
     if config["policy_type"] == "attention_discrete":
         # implement obs_parser
         obs_parser = StackingObsParser(**config["obs_parser"])
