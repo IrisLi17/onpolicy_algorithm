@@ -111,7 +111,7 @@ class MlpGaussianPolicy(ActorCriticPolicy):
             nn.Linear(hidden_size, hidden_size), nn.ReLU(),
         )
         self.actor_mean = nn.Linear(hidden_size, self.act_dim)
-        self.actor_logstd = nn.Parameter(-torch.ones(self.act_dim), requires_grad=True)
+        self.actor_logstd = nn.Parameter(torch.zeros(self.act_dim), requires_grad=True)
         self.value_feature = nn.Sequential(
             nn.Linear(self.obs_dim, hidden_size), nn.ReLU(),
             nn.Linear(hidden_size, hidden_size), nn.ReLU(),
@@ -127,6 +127,7 @@ class MlpGaussianPolicy(ActorCriticPolicy):
         nn.init.orthogonal_(self.actor_mean.weight, gain=0.01)
         nn.init.constant_(self.actor_mean.bias, 0.)
 
+    @torch.jit.ignore
     def forward(self, obs, rnn_hxs=None, rnn_masks=None):
         policy_features = self.policy_feature(obs)
         policy_mean = self.actor_mean(policy_features)
@@ -143,6 +144,7 @@ class MlpGaussianPolicy(ActorCriticPolicy):
         values = self.value_head(value_features)
         return values, action_dist, rnn_hxs
 
+    @torch.jit.ignore
     def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False):
         values, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks)
         if deterministic:
@@ -153,11 +155,19 @@ class MlpGaussianPolicy(ActorCriticPolicy):
         log_prob = action_dist.log_prob(actions).sum(dim=-1, keepdim=True)
         return values, actions, log_prob, rnn_hxs
 
+    @torch.jit.ignore
     def evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions):
         _, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks)
         log_prob = action_dist.log_prob(actions).sum(dim=-1, keepdim=True)
         entropy = action_dist.entropy().mean()
         return log_prob, entropy, rnn_hxs
+
+    @torch.jit.export
+    def take_action(self, obs):
+        policy_features = self.policy_feature(obs)
+        policy_mean = self.actor_mean(policy_features)
+        policy_mean = torch.clip(policy_mean, -1, 1)
+        return policy_mean
 
 
 class MlpDynamics(nn.Module):

@@ -7,26 +7,40 @@ def evaluate(env, policy, n_episode):
     episode_count = 0
     frame_count = 0
     obs = env.reset()
+    print("obs", obs)
     episode_reward = 0
+    episode_length = 0
+    reset_step = 0
     fig, ax = plt.subplots(1, 1)
     if os.path.exists("tmp"):
         shutil.rmtree("tmp")
     os.makedirs("tmp", exist_ok=True)
+    if hasattr(env, "obs_rms"):
+        init_obs_mean = env.obs_rms.mean.copy()
+        init_obs_std = env.obs_rms.var.copy()
     while episode_count < n_episode:
         img = env.render(mode="rgb_array")
         ax.cla()
         ax.imshow(img)
-        plt.imsave("tmp/tmp%d.png" % frame_count, img)
+        # plt.imsave("tmp/tmp%d.png" % frame_count, img)
         plt.pause(0.01)
         with torch.no_grad():
-            _, actions, _, _ = policy.act(obs, deterministic=False)
+            _, actions, _, _ = policy.act(obs, deterministic=True)
+        # if frame_count == reset_step:
+        #     print("action at reset step", actions)
         obs, reward, done, info = env.step(actions)
         episode_reward += reward[0]
+        episode_length += 1
         frame_count += 1
+        if hasattr(env, "obs_rms"):
+            assert np.linalg.norm(env.obs_rms.mean - init_obs_mean) < 1e-5
+            assert np.linalg.norm(env.obs_rms.var - init_obs_std) < 1e-5
         if done[0]:
-            print("episode reward", episode_reward)
+            print("episode reward", episode_reward, "episode length", episode_length)
             episode_count += 1
             episode_reward = 0
+            episode_length = 0
+            reset_step = frame_count
 
 
 def evaluate_fixed_states(env, policy, device, initial_states, goals, n_episode=100, deterministic=True, debug=False):
