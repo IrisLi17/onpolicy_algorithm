@@ -5,12 +5,12 @@ from utils.monitor import Monitor
 from vec_env.subproc_vec_env import SubprocVecEnv
 import torch
 import sys
-# try:
-#     import panda_gym
-# except ImportError:
-#     import sys
-#     sys.path.append("../panda-gym")
-#     import panda_gym
+try:
+    import panda_gym
+except ImportError:
+    import sys
+    sys.path.append("../panda-gym")
+    import panda_gym
 try:
     sys.path.append("../motion_imitation")
     import envs
