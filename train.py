@@ -1,7 +1,7 @@
 import importlib
 
 import torch, os
-from utils.make_env import make_vec_env, ObsParser, StackingObsParser
+from utils.make_env import make_vec_env
 from policies.attention_discrete import AttentionDiscretePolicy
 import argparse
 from utils import logger
@@ -36,10 +36,10 @@ def main():
                        training=(not args.play), **config["create_env_kwargs"])
     if config["policy_type"] == "attention_discrete":
         # implement obs_parser
-        obs_parser = StackingObsParser(**config["obs_parser"])
+        obs_parser = config["obs_parser"]
         policy = AttentionDiscretePolicy(obs_parser, env.action_space.shape[0], **config["policy"])
     elif config["policy_type"] == "attention_gaussian":
-        obs_parser = ObsParser(**config["obs_parser"])
+        obs_parser = config["obs_parser"]
         from policies.attention_discrete import AttentionGaussianPolicy
         policy = AttentionGaussianPolicy(obs_parser, env.action_space.shape[0], **config["policy"])
     elif config["policy_type"] == "mlp":
@@ -70,7 +70,7 @@ def main():
         if args.load_path is not None:
             model.load(args.load_path, eval=False)
             print("loaded", args.load_path)
-        model.learn(config["total_timesteps"], callback)
+        model.learn(config["total_timesteps"], [callback] + config.get("callback", []))
     else:
         model.load(args.load_path, eval=True)
         from utils.evaluation import evaluate
