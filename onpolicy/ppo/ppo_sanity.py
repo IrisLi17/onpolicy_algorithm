@@ -15,7 +15,7 @@ import wandb
 class PPO(object):
     def __init__(self, env, policy: nn.Module, device="cpu", n_steps=1024, nminibatches=32, noptepochs=10, gamma=0.99,
                  lam=0.95, learning_rate=2.5e-4, cliprange=0.2, ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, eps=1e-5,
-                 use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False, use_wandb=False):
+                 use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False, feature_only=False, use_wandb=False):
         self.env = env
         self.policy = policy
         self.device = device
@@ -32,6 +32,7 @@ class PPO(object):
         self.use_gae = use_gae
         self.use_clipped_value_loss = use_clipped_value_loss
         self.use_linear_lr_decay = use_linear_lr_decay
+        self.feature_only = feature_only
         self.use_wandb = use_wandb
 
         if isinstance(self.env, VecEnv):
@@ -40,7 +41,8 @@ class PPO(object):
             self.n_envs = 1
 
         self.rollouts = RolloutStorage(self.n_steps, self.n_envs,
-                                       self.env.observation_space.shape, self.env.action_space,
+                                       self.env.observation_space.shape if not self.feature_only else (self.policy.obs_feature_size,),
+                                       self.env.action_space,
                                        self.policy.recurrent_hidden_state_size)
 
         self.optimizer = optim.Adam(policy.parameters(), lr=learning_rate, eps=eps)
@@ -53,8 +55,10 @@ class PPO(object):
         # initial_states = self.env.env_method("get_state")
         # goal_dim = self.env.get_attr("goal")[0].shape[0]
         # if self.reduction_strategy == "simultaneous":
-
-        self.rollouts.obs[0].copy_(obs)
+        if self.feature_only:
+            self.rollouts.obs[0].copy_(self.policy.encode_obs(obs))
+        else:
+            self.rollouts.obs[0].copy_(obs)
         self.rollouts.to(self.device)
         self.num_timesteps = 0
         # loss_names = ["value_loss", "policy_loss", "entropy", "grad_norm", "param_norm",
@@ -82,6 +86,10 @@ class PPO(object):
 
                 # Obser reward and next obs
                 obs, reward, done, infos = self.env.step(action)
+                if self.feature_only:
+                    store_obs = self.policy.encode_obs(obs)
+                else:
+                    store_obs = obs
                 self.num_timesteps += self.n_envs
 
                 for e_idx, info in enumerate(infos):
@@ -95,7 +103,7 @@ class PPO(object):
                 bad_masks = torch.FloatTensor(
                     [[0.0] if 'bad_transition' in info.keys() else [1.0]
                      for info in infos])
-                self.rollouts.insert(obs, recurrent_hidden_states, action,
+                self.rollouts.insert(store_obs, recurrent_hidden_states, action,
                                      action_log_prob, value, reward, masks, bad_masks)
 
             with torch.no_grad():
