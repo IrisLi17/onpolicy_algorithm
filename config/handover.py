@@ -38,14 +38,15 @@ def gap_distance_callback(_locals, _globals):
 
 config = dict(
     env_id="PandaHandoverBimanual-v1",
-    num_workers=8,
+    num_workers=128,
     algo="ppo",
-    name="1b_os0.5_inhand0.5_sparse_gapcl_wopp",
+    name="1b_os0.5_inhand0.5_sparse_gapcl_wopp_ho100_done",
     total_timesteps=int(5e8),
     create_env_kwargs=dict(
         obs_keys=["observation", "achieved_goal", "desired_goal"],
-        done_when_success=False,
-        reward_scale=10,
+        done_when_success=True,
+        reward_offset=0,
+        reward_scale=1,
         kwargs=dict(
             os_rate=0.5,
             obj_in_hand_rate=0.5,
