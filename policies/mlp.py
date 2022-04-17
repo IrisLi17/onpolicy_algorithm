@@ -131,7 +131,8 @@ class MlpGaussianPolicy(ActorCriticPolicy):
     def forward(self, obs, rnn_hxs=None, rnn_masks=None):
         policy_features = self.policy_feature(obs)
         policy_mean = self.actor_mean(policy_features)
-        policy_logstd = torch.clamp(self.actor_logstd, -5, 0)
+        # policy_logstd = torch.clamp(self.actor_logstd, -5, 0)
+        policy_logstd = self.actor_logstd
         try:
             action_dist = Normal(loc=policy_mean, scale=torch.exp(policy_logstd))
         except:
@@ -159,7 +160,7 @@ class MlpGaussianPolicy(ActorCriticPolicy):
     def evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions):
         _, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks)
         log_prob = action_dist.log_prob(actions).sum(dim=-1, keepdim=True)
-        entropy = action_dist.entropy().mean()
+        entropy = action_dist.entropy()
         return log_prob, entropy, rnn_hxs
 
     @torch.jit.export
