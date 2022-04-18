@@ -8,7 +8,7 @@ sys.path.remove("../isaac_projects/panda-isaac")
 class PushConfig(BaseConfig):
     class env(BaseConfig.env):
         seed = 42
-        num_envs = 1024
+        num_envs = 4096
         # num_observations = 3 * 224 * 224 + 12
         num_observations = 3 + 27 + 3
         num_actions = 8
@@ -30,7 +30,7 @@ class PushConfig(BaseConfig):
 config = dict(
     env_id="IsaacPandaPushState-v0",
     algo="ppo",
-    name="test_joint_obshand_noquat_reset",
+    name="test_joint_obshand_noquat_reset_4096w_step32",
     # name="test_joint_decimal6_1024w_step64_dense",
     total_timesteps=int(5e7),
     entry_point=PandaPushEnv,
@@ -42,7 +42,7 @@ config = dict(
     ),
     train=dict(
       # n_steps=1024,
-      n_steps=64,
+      n_steps=32,
       nminibatches=32,
       # learning_rate=1e-3,
       learning_rate=2.5e-4,
