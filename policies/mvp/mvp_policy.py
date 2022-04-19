@@ -79,6 +79,7 @@ class PixelActorCritic(nn.Module):
         pretrain_type = encoder_cfg["pretrain_type"]
         freeze = encoder_cfg["freeze"]
         self.emb_dim = emb_dim = encoder_cfg["emb_dim"]
+        state_emb_dim = encoder_cfg.get("state_emb_dim", emb_dim)
 
         # Policy params
         actor_hidden_dim = policy_cfg["pi_hid_sizes"]
@@ -95,11 +96,11 @@ class PixelActorCritic(nn.Module):
         )
         self.image_shape = image_shape
         self.state_dim = states_shape[0]
-        self.state_enc = nn.Linear(states_shape[0], emb_dim)
+        self.state_enc = nn.Linear(states_shape[0], state_emb_dim)
 
         # Policy
         actor_layers = []
-        actor_layers.append(nn.Linear(emb_dim * 2, actor_hidden_dim[0]))
+        actor_layers.append(nn.Linear(emb_dim + state_emb_dim, actor_hidden_dim[0]))
         actor_layers.append(activation)
         for li in range(len(actor_hidden_dim)):
             if li == len(actor_hidden_dim) - 1:
@@ -113,7 +114,7 @@ class PixelActorCritic(nn.Module):
 
         # Value function
         critic_layers = []
-        critic_layers.append(nn.Linear(emb_dim * 2, critic_hidden_dim[0]))
+        critic_layers.append(nn.Linear(emb_dim + state_emb_dim, critic_hidden_dim[0]))
         critic_layers.append(activation)
         for li in range(len(critic_hidden_dim)):
             if li == len(critic_hidden_dim) - 1:
