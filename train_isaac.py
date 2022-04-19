@@ -31,6 +31,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     headless = True
     if args.play:
+        # pass
         config["env_config"].env.num_envs = 1
         # headless = False
     env = config["entry_point"](config["env_config"], headless=headless)
@@ -76,7 +77,9 @@ def evaluate(env, policy, n_episode):
     import shutil, os
     episode_count = 0
     step_count = 0
-    shutil.rmtree("tmp")
+    episode_length = 0
+    if os.path.exists("tmp"):
+        shutil.rmtree("tmp")
     os.makedirs("tmp", exist_ok=True)
     obs = env.reset()
     while episode_count < n_episode:
@@ -86,12 +89,22 @@ def evaluate(env, policy, n_episode):
         filename = "tmp/tmp%d.png" % step_count
         image.save(filename)
         with torch.no_grad():
+            if env.cfg.obs.type == "pixel":
+                obs_image = obs[0, :3 * 224 * 224].reshape((3, 224, 224))
+                obs_image = (obs_image * env.im_std + env.im_mean).permute(1, 2, 0) * 255
+                obs_image = Image.fromarray(obs_image.cpu().numpy().astype(np.uint8))
+                filename = "tmp/tmpobs%d.png" % step_count
+                obs_image.save(filename)
+                obs = policy.encode_obs(obs)
             _, actions, _, _ = policy.act(obs, deterministic=False)
         step_count += 1
+        episode_length += 1
         obs, reward, done, info = env.step(actions)
         if done[0]:
             print(obs[0])
+            print("episode length", episode_length, info)
             episode_count += 1
+            episode_length = 0
         
 if __name__ == "__main__":
     main()
