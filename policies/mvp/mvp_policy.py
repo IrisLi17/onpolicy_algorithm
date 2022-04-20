@@ -212,3 +212,14 @@ class PixelActorCritic(nn.Module):
         entropy = distribution.entropy()
 
         return actions_log_prob, entropy, rnn_hxs
+
+    def get_save_dict(self):
+        state_dict = self.state_dict()
+        delete_keys = []
+        for key in state_dict:
+            if key.startswith("obs_enc") and not (key.startswith("obs_enc.backbone.norm") or key.startswith("obs_enc.projector")):
+                delete_keys.append(key)
+        for key in delete_keys:
+            del state_dict[key]
+        print(state_dict.keys())
+        return state_dict

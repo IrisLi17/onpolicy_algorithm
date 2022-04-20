@@ -231,8 +231,11 @@ class PPO(object):
         return losses
 
     def save(self, save_path):
-        save_dict = {'policy': self.policy.state_dict(),
-                     'optimizer': self.optimizer.state_dict()}
+        save_dict = {'optimizer': self.optimizer.state_dict()}
+        if hasattr(self.policy, "get_save_dict"):
+            save_dict['policy'] = self.policy.get_save_dict()
+        else:
+            save_dict['policy'] = self.policy.state_dict()
         torch.save(save_dict, save_path)
 
     def load(self, load_pth, eval=True):
