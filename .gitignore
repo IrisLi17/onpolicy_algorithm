@@ -4,3 +4,4 @@ logs
 tmp
 *.png
 policies/mvp/pretrained
+.vscode
