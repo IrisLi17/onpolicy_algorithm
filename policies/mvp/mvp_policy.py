@@ -5,7 +5,7 @@ import os
 import torch
 import torch.nn as nn
 
-from torch.distributions import MultivariateNormal
+from torch.distributions import Normal
 
 import policies.mvp.vit as vit
 
@@ -94,7 +94,12 @@ class PixelActorCritic(nn.Module):
             freeze=freeze,
             emb_dim=emb_dim
         )
-        self.image_shape = image_shape
+        if len(image_shape) == 4:
+            self.image_shape = image_shape[1:]
+            self.history_length = image_shape[0]
+        else:
+            self.image_shape = image_shape
+            self.history_length = 1
         self.state_dim = states_shape[0]
         self.state_enc = nn.Linear(states_shape[0], state_emb_dim)
 
@@ -132,7 +137,8 @@ class PixelActorCritic(nn.Module):
         print(self.critic)
 
         # Action noise
-        self.log_std = nn.Parameter(np.log(initial_std) * torch.ones(*actions_shape))
+        # self.log_std = nn.Parameter(np.log(initial_std) * torch.ones(*actions_shape))
+        self.log_std = nn.Parameter(torch.zeros(*actions_shape))
 
         # Initialize the weights like in stable baselines
         actor_weights = [np.sqrt(2)] * len(actor_hidden_dim)
@@ -165,14 +171,16 @@ class PixelActorCritic(nn.Module):
 
         actions_mean = self.actor(joint_emb)
 
-        covariance = torch.diag(self.log_std.exp() * self.log_std.exp())
-        distribution = MultivariateNormal(actions_mean, scale_tril=covariance)
+        # covariance = torch.diag(self.log_std.exp() * self.log_std.exp())
+        # distribution = MultivariateNormal(actions_mean, scale_tril=covariance)
+        distribution = Normal(loc=actions_mean, scale=torch.exp(self.log_std))
 
         if deterministic:
             actions = actions_mean
         else:
             actions = distribution.sample()
-        actions_log_prob = distribution.log_prob(actions).unsqueeze(dim=-1)
+        # actions_log_prob = distribution.log_prob(actions).unsqueeze(dim=-1)
+        actions_log_prob = distribution.log_prob(actions).sum(dim=-1, keepdim=True)
 
         value = self.critic(joint_emb)
 
@@ -180,11 +188,14 @@ class PixelActorCritic(nn.Module):
 
     @torch.no_grad()
     def encode_obs(self, observations):
-        assert observations.shape[1] == int(np.prod(self.image_shape)) + self.state_dim
+        batch_size = observations.shape[0]
+        assert observations.shape[1] == int(np.prod(self.image_shape)) * self.history_length + self.state_dim
         image_obs = torch.narrow(observations, dim=1, start=0, length=int(observations.shape[1] - self.state_dim))
         image_obs = image_obs.reshape((-1, *self.image_shape))
         state_obs = torch.narrow(observations, dim=1, start=int(np.prod(self.image_shape)), length=self.state_dim)
         obs_emb, obs_feat = self.obs_enc(image_obs)
+        obs_emb = obs_emb.reshape((batch_size, self.history_length, -1)).reshape((batch_size, -1))
+        obs_feat = obs_feat.reshape((batch_size, self.history_length, -1)).reshape((batch_size, -1))
         return torch.cat([obs_feat, state_obs], dim=-1).detach()
 
     def get_value(self, feature_obs, rnn_hxs=None, rnn_masks=None):
@@ -205,10 +216,12 @@ class PixelActorCritic(nn.Module):
 
         actions_mean = self.actor(joint_emb)
 
-        covariance = torch.diag(self.log_std.exp() * self.log_std.exp())
-        distribution = MultivariateNormal(actions_mean, scale_tril=covariance)
+        # covariance = torch.diag(self.log_std.exp() * self.log_std.exp())
+        # distribution = MultivariateNormal(actions_mean, scale_tril=covariance)
+        distribution = Normal(loc=actions_mean, scale=torch.exp(self.log_std))
 
-        actions_log_prob = distribution.log_prob(actions).unsqueeze(dim=-1)
+        # actions_log_prob = distribution.log_prob(actions).unsqueeze(dim=-1)
+        actions_log_prob = distribution.log_prob(actions).sum(dim=-1, keepdim=True)
         entropy = distribution.entropy()
 
         return actions_log_prob, entropy, rnn_hxs
