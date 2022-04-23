@@ -107,7 +107,7 @@ class PixelActorCritic(nn.Module):
 
         # Policy
         actor_layers = []
-        actor_layers.append(nn.Linear(emb_dim + state_emb_dim, actor_hidden_dim[0]))
+        actor_layers.append(nn.Linear(emb_dim * self.history_length + state_emb_dim, actor_hidden_dim[0]))
         actor_layers.append(activation)
         for li in range(len(actor_hidden_dim)):
             if li == len(actor_hidden_dim) - 1:
@@ -121,7 +121,7 @@ class PixelActorCritic(nn.Module):
 
         # Value function
         critic_layers = []
-        critic_layers.append(nn.Linear(emb_dim + state_emb_dim, critic_hidden_dim[0]))
+        critic_layers.append(nn.Linear(emb_dim * self.history_length + state_emb_dim, critic_hidden_dim[0]))
         critic_layers.append(activation)
         for li in range(len(critic_hidden_dim)):
             if li == len(critic_hidden_dim) - 1:
@@ -152,7 +152,7 @@ class PixelActorCritic(nn.Module):
 
     @property
     def obs_feature_size(self):
-        return self.obs_enc.gap_dim + self.state_dim
+        return self.obs_enc.gap_dim * self.history_length + self.state_dim
 
     @staticmethod
     def init_weights(sequential, scales):
@@ -165,10 +165,11 @@ class PixelActorCritic(nn.Module):
 
     @torch.no_grad()
     def act(self, feature_obs, rnn_hxs=None, rnn_masks=None, deterministic=False):
-        assert feature_obs.shape[1] == self.obs_enc.gap_dim + self.state_dim
-        image_feat = torch.narrow(feature_obs, dim=1, start=0, length=self.obs_enc.gap_dim)
+        assert feature_obs.shape[1] == self.history_length * self.obs_enc.gap_dim + self.state_dim
+        image_feat = torch.narrow(feature_obs, dim=1, start=0, length=self.obs_enc.gap_dim * self.history_length)
         state_obs = torch.narrow(feature_obs, dim=1, start=self.obs_enc.gap_dim, length=self.state_dim)
-        image_emb = self.obs_enc.forward_feat(image_feat)
+        batch_size = feature_obs.shape[0]
+        image_emb = self.obs_enc.forward_feat(image_feat.reshape((batch_size * self.history_length, -1))).reshape((batch_size, -1))
         state_emb = self.state_enc(state_obs)
         critic_state_emb = self.critic_state_enc(state_obs)
         # joint_emb = state_emb
@@ -208,9 +209,10 @@ class PixelActorCritic(nn.Module):
         return torch.cat([obs_feat, state_obs], dim=-1).detach()
 
     def get_value(self, feature_obs, rnn_hxs=None, rnn_masks=None):
-        image_feat = torch.narrow(feature_obs, dim=1, start=0, length=self.obs_enc.gap_dim)
+        image_feat = torch.narrow(feature_obs, dim=1, start=0, length=self.obs_enc.gap_dim * self.history_length)
         state_obs = torch.narrow(feature_obs, dim=1, start=self.obs_enc.gap_dim, length=self.state_dim)
-        image_emb = self.obs_enc.forward_feat(image_feat)
+        batch_size = feature_obs.shape[0]
+        image_emb = self.obs_enc.forward_feat(image_feat.reshape((batch_size * self.history_length, -1))).reshape((batch_size, -1))
         state_emb = self.critic_state_enc(state_obs)
         # joint_emb = state_emb
         joint_emb = torch.cat([image_emb, state_emb], dim=1)
@@ -219,9 +221,10 @@ class PixelActorCritic(nn.Module):
         return value
 
     def evaluate_actions(self, feature_obs, rnn_hxs=None, rnn_masks=None, actions=None):
-        image_feat = torch.narrow(feature_obs, dim=1, start=0, length=self.obs_enc.gap_dim)
+        image_feat = torch.narrow(feature_obs, dim=1, start=0, length=self.obs_enc.gap_dim * self.history_length)
         state_obs = torch.narrow(feature_obs, dim=1, start=self.obs_enc.gap_dim, length=self.state_dim)
-        image_emb = self.obs_enc.forward_feat(image_feat)
+        batch_size = feature_obs.shape[0]
+        image_emb = self.obs_enc.forward_feat(image_feat.reshape((batch_size * self.history_length, -1))).reshape((batch_size, -1))
         state_emb = self.state_enc(state_obs)
         # print("In evaluate_actions", state_obs.shape, state_obs[0])
         # joint_emb = state_emb
