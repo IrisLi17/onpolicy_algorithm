@@ -80,6 +80,7 @@ class PixelActorCritic(nn.Module):
         freeze = encoder_cfg["freeze"]
         self.emb_dim = emb_dim = encoder_cfg["emb_dim"]
         state_emb_dim = encoder_cfg.get("state_emb_dim", emb_dim)
+        self.use_flare = encoder_cfg.get("use_flare", False)
 
         # Policy params
         actor_hidden_dim = policy_cfg["pi_hid_sizes"]
@@ -163,13 +164,28 @@ class PixelActorCritic(nn.Module):
             )
         ]
 
-    @torch.no_grad()
-    def act(self, feature_obs, rnn_hxs=None, rnn_masks=None, deterministic=False):
+    def _process_feature_obs(self, feature_obs):
         assert feature_obs.shape[1] == self.history_length * self.obs_enc.gap_dim + self.state_dim
         image_feat = torch.narrow(feature_obs, dim=1, start=0, length=self.obs_enc.gap_dim * self.history_length)
         state_obs = torch.narrow(feature_obs, dim=1, start=self.obs_enc.gap_dim, length=self.state_dim)
         batch_size = feature_obs.shape[0]
-        image_emb = self.obs_enc.forward_feat(image_feat.reshape((batch_size * self.history_length, -1))).reshape((batch_size, -1))
+        image_emb = self.obs_enc.forward_feat(image_feat.reshape((batch_size * self.history_length, -1)))
+        if not self.use_flare:
+            image_emb = image_emb.reshape((batch_size, -1))
+        else:
+            image_emb = image_emb.reshape((batch_size, self.history_length, -1))
+            buffer = []
+            for i in range(self.history_length):
+                if i < self.history_length - 1:
+                    buffer.append(image_emb[:, i] - image_emb[:, i + 1])
+                else:
+                    buffer.append(image_emb[:, i])
+            image_emb = torch.cat(buffer, dim=-1)
+        return image_emb, state_obs
+
+    @torch.no_grad()
+    def act(self, feature_obs, rnn_hxs=None, rnn_masks=None, deterministic=False):
+        image_emb, state_obs = self._process_feature_obs(feature_obs)
         state_emb = self.state_enc(state_obs)
         critic_state_emb = self.critic_state_enc(state_obs)
         # joint_emb = state_emb
@@ -209,10 +225,7 @@ class PixelActorCritic(nn.Module):
         return torch.cat([obs_feat, state_obs], dim=-1).detach()
 
     def get_value(self, feature_obs, rnn_hxs=None, rnn_masks=None):
-        image_feat = torch.narrow(feature_obs, dim=1, start=0, length=self.obs_enc.gap_dim * self.history_length)
-        state_obs = torch.narrow(feature_obs, dim=1, start=self.obs_enc.gap_dim, length=self.state_dim)
-        batch_size = feature_obs.shape[0]
-        image_emb = self.obs_enc.forward_feat(image_feat.reshape((batch_size * self.history_length, -1))).reshape((batch_size, -1))
+        image_emb, state_obs = self._process_feature_obs(feature_obs)
         state_emb = self.critic_state_enc(state_obs)
         # joint_emb = state_emb
         joint_emb = torch.cat([image_emb, state_emb], dim=1)
@@ -221,10 +234,7 @@ class PixelActorCritic(nn.Module):
         return value
 
     def evaluate_actions(self, feature_obs, rnn_hxs=None, rnn_masks=None, actions=None):
-        image_feat = torch.narrow(feature_obs, dim=1, start=0, length=self.obs_enc.gap_dim * self.history_length)
-        state_obs = torch.narrow(feature_obs, dim=1, start=self.obs_enc.gap_dim, length=self.state_dim)
-        batch_size = feature_obs.shape[0]
-        image_emb = self.obs_enc.forward_feat(image_feat.reshape((batch_size * self.history_length, -1))).reshape((batch_size, -1))
+        image_emb, state_obs = self._process_feature_obs(feature_obs)
         state_emb = self.state_enc(state_obs)
         # print("In evaluate_actions", state_obs.shape, state_obs[0])
         # joint_emb = state_emb
