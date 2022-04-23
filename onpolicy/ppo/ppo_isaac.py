@@ -81,15 +81,15 @@ class PPO(object):
                 obs, reward, dones, info = self.env.step(action)
                 step_time += time.time() - step_start
                 reward = reward.float().unsqueeze(dim=-1)
-                with torch.no_grad():
-                    _next_value = self.policy.get_value(
-                        obs, None, None).detach()
-                    # If terminate due to time limit, mimic infinite horizon
-                    reward += self.gamma * _next_value * info["time_out"].float().unsqueeze(dim=-1)
                 if self.feature_only:
                     store_obs = self.policy.encode_obs(obs)
                 else:
                     store_obs = obs
+                with torch.no_grad():
+                    _next_value = self.policy.get_value(
+                        store_obs, None, None).detach()
+                    # If terminate due to time limit, mimic infinite horizon
+                    reward += self.gamma * _next_value * info["time_out"].float().unsqueeze(dim=-1)
                 self.num_timesteps += self.n_envs
 
                 maybe_ep_info = info.get('episode')
