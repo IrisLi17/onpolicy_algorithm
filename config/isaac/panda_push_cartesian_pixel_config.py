@@ -9,9 +9,9 @@ class PushConfig(BaseConfig):
     class env(BaseConfig.env):
         seed = 42
         num_envs = 256
-        num_observations = 3 * 224 * 224 + 22
+        num_observations = 1 * 3 * 224 * 224 + 22
         num_actions = 4
-        max_episode_length = 50
+        max_episode_length = 100
     
     class obs(BaseConfig.obs):
         type = "pixel"
@@ -35,13 +35,13 @@ class PushConfig(BaseConfig):
 config = dict(
     env_id="IsaacPandaPushPixel-v0",
     algo="ppo",
-    name="ik_dense_256w",
+    name="ik_filter_dense_256w",
     total_timesteps=int(1e8),
     entry_point=PandaPushEnv,
     env_config=PushConfig(),
     policy_type=("policies.mvp.mvp_policy", "PixelActorCritic"),
     policy=dict(
-        image_shape=(3, 224, 224),
+        image_shape=(1, 3, 224, 224),
         states_shape=(22,),
         actions_shape=(4,),
         initial_std=1.0,
@@ -51,7 +51,8 @@ config = dict(
             pretrain_type="hoi",
             freeze=True,
             emb_dim=64,
-            state_emb_dim=64),
+            state_emb_dim=64,
+            use_flare=False),
         policy_cfg=dict(pi_hid_sizes=[64, 64], vf_hid_sizes=[64, 64])
     ),
     train=dict(

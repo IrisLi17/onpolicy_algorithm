@@ -12,7 +12,7 @@ class PushConfig(BaseConfig):
         # num_observations = 3 * 224 * 224 + 12
         num_observations = 3 + 22
         num_actions = 4
-        max_episode_length = 50
+        max_episode_length = 100
     
     class obs(BaseConfig.obs):
         type = "state"
@@ -20,6 +20,7 @@ class PushConfig(BaseConfig):
     class control(BaseConfig.control):
         decimal = 6
         controller = "ik"
+        # controller = "osc"
         # common_speed = 2.17 * 1
         # common_speed = 1.5 * decimal
     
@@ -41,7 +42,7 @@ def goal_in_air_cl(_locals, _globals):
 config = dict(
     env_id="IsaacPandaPushState-v0",
     algo="ppo",
-    name="test_ik_diversereset_dense",
+    name="test_ik_dense_filter",
     # name="test_joint_decimal6_1024w_step64_dense",
     total_timesteps=int(1e8),
     entry_point=PandaPushEnv,
