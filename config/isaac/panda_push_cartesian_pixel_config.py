@@ -9,7 +9,7 @@ class PushConfig(BaseConfig):
     class env(BaseConfig.env):
         seed = 42
         num_envs = 256
-        num_observations = 1 * 3 * 224 * 224 + 22
+        num_observations = 1 * 3 * 224 * 224 + 15
         num_actions = 4
         max_episode_length = 100
     
@@ -20,7 +20,7 @@ class PushConfig(BaseConfig):
     
     class cam(BaseConfig.cam):
         view = "ego"
-        fov = 120
+        fov = 86
     
     class control(BaseConfig.control):
         decimal = 6
@@ -35,14 +35,14 @@ class PushConfig(BaseConfig):
 config = dict(
     env_id="IsaacPandaPushPixel-v0",
     algo="ppo",
-    name="ik_filter_dense_256w",
+    name="ik_filter_dense_256w_fov86_state15",
     total_timesteps=int(1e8),
     entry_point=PandaPushEnv,
     env_config=PushConfig(),
     policy_type=("policies.mvp.mvp_policy", "PixelActorCritic"),
     policy=dict(
         image_shape=(1, 3, 224, 224),
-        states_shape=(22,),
+        states_shape=(15,),
         actions_shape=(4,),
         initial_std=1.0,
         encoder_cfg=dict(

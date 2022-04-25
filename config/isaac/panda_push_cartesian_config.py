@@ -10,7 +10,7 @@ class PushConfig(BaseConfig):
         seed = 42
         num_envs = 1024
         # num_observations = 3 * 224 * 224 + 12
-        num_observations = 3 + 22
+        num_observations = 3 + 15
         num_actions = 4
         max_episode_length = 100
     
@@ -42,7 +42,7 @@ def goal_in_air_cl(_locals, _globals):
 config = dict(
     env_id="IsaacPandaPushState-v0",
     algo="ppo",
-    name="test_ik_dense_filter",
+    name="test_ik_dense_filter_obs15",
     # name="test_joint_decimal6_1024w_step64_dense",
     total_timesteps=int(1e8),
     entry_point=PandaPushEnv,
