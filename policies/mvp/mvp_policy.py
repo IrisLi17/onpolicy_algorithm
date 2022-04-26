@@ -106,6 +106,9 @@ class PixelActorCritic(nn.Module):
         self.state_enc = nn.Linear(states_shape[0], state_emb_dim)
         self.critic_state_enc = nn.Linear(states_shape[0], state_emb_dim)
 
+        if self.use_flare:
+            self.image_emb_layer_norm = nn.LayerNorm(emb_dim * self.history_length)
+
         # Policy
         actor_layers = []
         actor_layers.append(nn.Linear(emb_dim * self.history_length + state_emb_dim, actor_hidden_dim[0]))
@@ -180,7 +183,7 @@ class PixelActorCritic(nn.Module):
                     buffer.append(image_emb[:, i] - image_emb[:, i + 1])
                 else:
                     buffer.append(image_emb[:, i])
-            image_emb = torch.cat(buffer, dim=-1)
+            image_emb = self.image_emb_layer_norm(torch.cat(buffer, dim=-1))
         return image_emb, state_obs
 
     @torch.no_grad()
