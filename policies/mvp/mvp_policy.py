@@ -170,7 +170,7 @@ class PixelActorCritic(nn.Module):
     def _process_feature_obs(self, feature_obs):
         assert feature_obs.shape[1] == self.history_length * self.obs_enc.gap_dim + self.state_dim
         image_feat = torch.narrow(feature_obs, dim=1, start=0, length=self.obs_enc.gap_dim * self.history_length)
-        state_obs = torch.narrow(feature_obs, dim=1, start=self.obs_enc.gap_dim, length=self.state_dim)
+        state_obs = torch.narrow(feature_obs, dim=1, start=self.obs_enc.gap_dim * self.history_length, length=self.state_dim)
         batch_size = feature_obs.shape[0]
         image_emb = self.obs_enc.forward_feat(image_feat.reshape((batch_size * self.history_length, -1)))
         if not self.use_flare:
