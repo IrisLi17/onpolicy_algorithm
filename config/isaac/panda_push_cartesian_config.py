@@ -16,7 +16,7 @@ class PushConfig(BaseConfig):
     
     class obs(BaseConfig.obs):
         type = "state"
-        history_length = 2
+        state_history_length = 2
     
     class control(BaseConfig.control):
         decimal = 6

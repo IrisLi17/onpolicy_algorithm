@@ -9,14 +9,15 @@ class PushConfig(BaseConfig):
     class env(BaseConfig.env):
         seed = 42
         num_envs = 256
-        num_observations = 2 * (3 * 224 * 224 + 15)
+        num_observations = 1 * (3 * 224 * 224) + 2 * 15
         num_actions = 4
         max_episode_length = 100
     
     class obs(BaseConfig.obs):
         type = "pixel"
         im_size = 224
-        history_length = 2
+        history_length = 1
+        state_history_length = 2
     
     class cam(BaseConfig.cam):
         view = "ego"
@@ -41,7 +42,7 @@ config = dict(
     env_config=PushConfig(),
     policy_type=("policies.mvp.mvp_policy", "PixelActorCritic"),
     policy=dict(
-        image_shape=(2, 3, 224, 224),
+        image_shape=(1, 3, 224, 224),
         states_shape=(2 * 15,),
         actions_shape=(4,),
         initial_std=1.0,
