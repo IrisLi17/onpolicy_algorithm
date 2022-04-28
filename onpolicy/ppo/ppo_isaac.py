@@ -249,7 +249,41 @@ class PPO(object):
             self.policy.eval()
         else:
             self.policy.train()
-
+    
+    def pretrain(self, obs_buffer, action_buffer):
+        optimizer = optim.Adam(self.policy.parameters(), lr=2.5e-4)
+        n_epoch = 30
+        batch_size = 64
+        n_data = obs_buffer.shape[0]
+        assert action_buffer.shape[0] == n_data
+        inds = np.arange(n_data)
+        if self.feature_only:
+            with torch.no_grad():
+                # TODO: divide into minibatch to avoid too much memory usage
+                _n_batch = n_data // 256 if n_data % 256 == 0 else n_data // 256 + 1
+                _obs_buffer = []
+                for i in range(_n_batch):
+                    _obs_buffer.append(self.policy.encode_obs(torch.from_numpy(obs_buffer[i * 256: (i + 1) * 256]).to(self.device)))
+                obs_buffer = torch.cat(_obs_buffer, dim=0)
+        else:
+            obs_buffer = torch.from_numpy(obs_buffer).to(self.device)
+        action_buffer = torch.from_numpy(action_buffer).to(self.device)
+        losses = deque(maxlen=100)
+        for e in range(n_epoch):
+            np.random.shuffle(inds)
+            for m in range(n_data // batch_size):
+                mb_ids = inds[m * batch_size: (m + 1) * batch_size]
+                obs_batch = obs_buffer[mb_ids]
+                actions_batch = action_buffer[mb_ids]
+                action_log_probs, dist_entropy, _ = self.policy.evaluate_actions(
+                    obs_batch, None, None,
+                    actions_batch)
+                loss = -action_log_probs.mean()
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                losses.append(loss.item())
+            print(e, np.mean(losses))
 
 def safe_mean(arr):
     """

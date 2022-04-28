@@ -10,6 +10,7 @@ def parse_arguments():
     parser.add_argument("--config", type=str)
     parser.add_argument("--play", action="store_true", default=False)
     parser.add_argument("--load_path", type=str, default=None)
+    parser.add_argument("--imitation_pretrain", action="store_true", default=False)
     args = parser.parse_args()
     return args
 
@@ -64,8 +65,18 @@ def main():
         if args.load_path is not None:
             model.load(args.load_path, eval=False)
             print("loaded", args.load_path)
+        if args.imitation_pretrain:
+            import pickle
+            import numpy as np
+            with open("imitation_data.pkl", "rb") as f:
+                demo = pickle.load(f)
+            obs_buffer = np.concatenate([traj["image_obs"] for traj in demo], axis=0)
+            actions_buffer = np.concatenate([traj["action"] for traj in demo], axis=0)
+            model.pretrain(obs_buffer, actions_buffer)
         model.learn(config["total_timesteps"], [callback] + config.get("callback", []))
     else:
+        # collect_imitation_demo(env, args.load_path)
+        # exit()
         model.load(args.load_path, eval=True)
         evaluate(env, policy, 10)
 
@@ -105,6 +116,43 @@ def evaluate(env, policy, n_episode):
             print("episode length", episode_length, info)
             episode_count += 1
             episode_length = 0
-        
+
+def collect_imitation_demo(env, load_path):
+    import torch
+    import numpy as np
+    import pickle
+    from policies.mlp import MlpGaussianPolicy
+    state_policy = MlpGaussianPolicy(18, env.num_actions, hidden_size=64)
+    state_policy.to(env.device)
+    checkpoint = torch.load(load_path, map_location=env.device)
+    state_policy.load_state_dict(checkpoint['policy'], strict=False)
+    episode_count = 0
+    episode_reward = []
+    obs = env.reset()
+    demo = [dict(image_obs=[], state_obs=[], action=[], reward=[])]
+    while True:
+        state_obs = env.get_state_obs()
+        with torch.no_grad():
+            _, actions, _, _ = state_policy.act(state_obs, deterministic=False)
+        demo[-1]["image_obs"].append(obs[0].detach().cpu().numpy())
+        demo[-1]["state_obs"].append(state_obs[0].detach().cpu().numpy())
+        demo[-1]["action"].append(actions[0].cpu().numpy())
+        obs, reward, done, info = env.step(actions)
+        demo[-1]["reward"].append(reward[0].cpu().numpy())
+        if done[0]:
+            demo[-1]["image_obs"] = np.stack(demo[-1]["image_obs"], axis=0)
+            demo[-1]["state_obs"] = np.stack(demo[-1]["state_obs"], axis=0)
+            demo[-1]["action"] = np.stack(demo[-1]["action"], axis=0)
+            demo[-1]["reward"] = np.stack(demo[-1]["reward"], axis=0)
+            episode_count += 1
+            # episode_reward.append(np.sum(demo[-1]["reward"]))
+            print("episode count", episode_count, "episode reward", np.sum(demo[-1]["reward"]))
+            if episode_count < 500:
+                demo.append(dict(image_obs=[], state_obs=[], action=[], reward=[]))
+            else:
+                break
+    with open("imitation_data.pkl", "wb") as f:
+        pickle.dump(demo, f)
+
 if __name__ == "__main__":
     main()
