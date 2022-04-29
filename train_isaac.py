@@ -10,6 +10,7 @@ def parse_arguments():
     parser.add_argument("--config", type=str)
     parser.add_argument("--play", action="store_true", default=False)
     parser.add_argument("--load_path", type=str, default=None)
+    parser.add_argument("--collect_demo", action="store_true", default=False)
     parser.add_argument("--imitation_pretrain", action="store_true", default=False)
     args = parser.parse_args()
     return args
@@ -61,24 +62,32 @@ def main():
             model.save(os.path.join(config["log_dir"], "model_%d.pt" % locals["j"]))
 
     logger.log(config)
-    if not args.play:
-        if args.load_path is not None:
-            model.load(args.load_path, eval=False)
-            print("loaded", args.load_path)
-        if args.imitation_pretrain:
-            import pickle
-            import numpy as np
-            with open("imitation_data.pkl", "rb") as f:
-                demo = pickle.load(f)
-            obs_buffer = np.concatenate([traj["image_obs"] for traj in demo], axis=0)
-            actions_buffer = np.concatenate([traj["action"] for traj in demo], axis=0)
-            model.pretrain(obs_buffer, actions_buffer)
-        model.learn(config["total_timesteps"], [callback] + config.get("callback", []))
+    if args.collect_demo:
+        collect_imitation_demo(env, args.load_path)
     else:
-        # collect_imitation_demo(env, args.load_path)
-        # exit()
-        model.load(args.load_path, eval=True)
-        evaluate(env, policy, 10)
+        if not args.play:
+            if args.load_path is not None:
+                model.load(args.load_path, eval=False)
+                print("loaded", args.load_path)
+            if args.imitation_pretrain:
+                import pickle
+                import numpy as np
+                obs_buffer, actions_buffer = [], []
+                with open("imitation_data.pkl", "rb") as f:
+                    try:
+                        while True:
+                            traj = pickle.load(f)
+                            obs_buffer.append(traj["image_obs"])
+                            actions_buffer.append(traj["action"])
+                    except EOFError:
+                        pass
+                obs_buffer = np.concatenate(obs_buffer, axis=0)
+                actions_buffer = np.concatenate(actions_buffer, axis=0)
+                model.pretrain(obs_buffer, actions_buffer)
+            model.learn(config["total_timesteps"], [callback] + config.get("callback", []))
+        else:
+            model.load(args.load_path, eval=True)
+            evaluate(env, policy, 10)
 
 
 def evaluate(env, policy, n_episode):
@@ -127,32 +136,35 @@ def collect_imitation_demo(env, load_path):
     checkpoint = torch.load(load_path, map_location=env.device)
     state_policy.load_state_dict(checkpoint['policy'], strict=False)
     episode_count = 0
-    episode_reward = []
+    if os.path.exists("imitation_data.pkl"):
+        os.remove("imitation_data.pkl")
     obs = env.reset()
-    demo = [dict(image_obs=[], state_obs=[], action=[], reward=[])]
-    while True:
+    demo = [dict(image_obs=[], state_obs=[], action=[], reward=[]) for _ in range(env.num_envs)]
+    while episode_count < 500:
         state_obs = env.get_state_obs()
         with torch.no_grad():
             _, actions, _, _ = state_policy.act(state_obs, deterministic=False)
-        demo[-1]["image_obs"].append(obs[0].detach().cpu().numpy())
-        demo[-1]["state_obs"].append(state_obs[0].detach().cpu().numpy())
-        demo[-1]["action"].append(actions[0].cpu().numpy())
+        for i in range(env.num_envs):
+            demo[i]["image_obs"].append(obs[i].detach().cpu().numpy())
+            demo[i]["state_obs"].append(state_obs[i].detach().cpu().numpy())
+            demo[i]["action"].append(actions[i].cpu().numpy())
         obs, reward, done, info = env.step(actions)
-        demo[-1]["reward"].append(reward[0].cpu().numpy())
-        if done[0]:
-            demo[-1]["image_obs"] = np.stack(demo[-1]["image_obs"], axis=0)
-            demo[-1]["state_obs"] = np.stack(demo[-1]["state_obs"], axis=0)
-            demo[-1]["action"] = np.stack(demo[-1]["action"], axis=0)
-            demo[-1]["reward"] = np.stack(demo[-1]["reward"], axis=0)
-            episode_count += 1
-            # episode_reward.append(np.sum(demo[-1]["reward"]))
-            print("episode count", episode_count, "episode reward", np.sum(demo[-1]["reward"]))
-            if episode_count < 500:
-                demo.append(dict(image_obs=[], state_obs=[], action=[], reward=[]))
-            else:
-                break
-    with open("imitation_data.pkl", "wb") as f:
-        pickle.dump(demo, f)
+        for i in range(env.num_envs):
+            demo[i]["reward"].append(reward[i].cpu().numpy())
+            if done[i]:
+                if demo[i]["reward"][-1] >= 1:
+                    demo[i]["image_obs"] = np.stack(demo[i]["image_obs"], axis=0)
+                    demo[i]["state_obs"] = np.stack(demo[i]["state_obs"], axis=0)
+                    demo[i]["action"] = np.stack(demo[i]["action"], axis=0)
+                    demo[i]["reward"] = np.stack(demo[i]["reward"], axis=0)
+                    episode_count += 1
+                    # episode_reward.append(np.sum(demo[-1]["reward"]))
+                    print("episode count", episode_count, "episode reward", np.sum(demo[i]["reward"]))
+                    with open("imitation_data.pkl", "ab") as f:
+                        pickle.dump(demo[i], f)
+                demo[i] = dict(image_obs=[], state_obs=[], action=[], reward=[])
+                if episode_count >= 500:
+                    break
 
 if __name__ == "__main__":
     main()
