@@ -144,9 +144,7 @@ class RolloutStorage(object):
                                advantages,
                                num_mini_batch=None,
                                mini_batch_size=None,
-                               with_aux=False):
-        if with_aux:
-            assert self.aux is not None
+                               ):
         num_steps, num_processes = self.rewards.size()[0:2]
         batch_size = num_processes * num_steps
 
@@ -181,10 +179,18 @@ class RolloutStorage(object):
                 adv_targ = None
             else:
                 adv_targ = advantages.view(-1, 1)[indices]
-
-            yield obs_batch, recurrent_hidden_states_batch, actions_batch, \
+            
+            if self.aux is None:
+                data = obs_batch, recurrent_hidden_states_batch, actions_batch, \
+                    value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, \
+                    episode_success_batch, adv_targ, next_obs_batch, next_masks
+            else:
+                aux_batch = self.aux.view(-1, *self.aux.size()[2:])[indices]
+                data = obs_batch, recurrent_hidden_states_batch, actions_batch, \
                   value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, \
-                  episode_success_batch, adv_targ, next_obs_batch, next_masks
+                  episode_success_batch, adv_targ, next_obs_batch, next_masks, aux_batch
+
+            yield data
 
     # TODO: implement recurrent version with aux info and value ensemble if needed
     def recurrent_generator(self, advantages, num_mini_batch):

@@ -10,6 +10,7 @@ class PushConfig(BaseConfig):
         seed = 42
         num_envs = 256
         num_observations = 1 * (3 * 224 * 224) + 1 * 15
+        num_state_obs = 18
         num_actions = 4
         max_episode_length = 100
     
@@ -22,6 +23,8 @@ class PushConfig(BaseConfig):
     class cam(BaseConfig.cam):
         view = "ego"
         fov = 86
+        w = 398
+        h = 224
     
     class control(BaseConfig.control):
         decimal = 6
@@ -67,6 +70,7 @@ config = dict(
       cliprange=0.2,
       ent_coef=0.01,
       max_grad_norm=0.5,
+      dagger=True,
       use_wandb=True,
     ),
 )

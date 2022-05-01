@@ -14,7 +14,8 @@ import wandb
 class PPO(object):
     def __init__(self, env, policy: nn.Module, device="cpu", n_steps=1024, nminibatches=32, noptepochs=10, gamma=0.99,
                  lam=0.95, learning_rate=2.5e-4, cliprange=0.2, ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, eps=1e-5,
-                 use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False, feature_only=False, use_wandb=False):
+                 use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False, feature_only=False, 
+                 dagger=False, expert_policy=None, use_wandb=False):
         self.env = env
         self.policy = policy
         self.device = device
@@ -32,6 +33,8 @@ class PPO(object):
         self.use_clipped_value_loss = use_clipped_value_loss
         self.use_linear_lr_decay = use_linear_lr_decay
         self.feature_only = feature_only
+        self.use_dagger = dagger
+        self.expert_policy = expert_policy
         self.use_wandb = use_wandb
 
         self.n_envs = self.env.num_envs
@@ -39,10 +42,14 @@ class PPO(object):
         self.rollouts = RolloutStorage(self.n_steps, self.n_envs,
                                        (self.env.num_obs,) if not self.feature_only else (self.policy.obs_feature_size,),
                                        self.env.num_actions,
-                                       self.policy.recurrent_hidden_state_size)
+                                       self.policy.recurrent_hidden_state_size,
+                                       aux_shape=(self.env.num_state_obs,) if dagger else None)
 
         self.optimizer = optim.Adam(policy.parameters(), lr=learning_rate, eps=eps)
 
+    def set_expert_policy(self, policy):
+        self.expert_policy = policy
+    
     def learn(self, total_timesteps, callback=None):
         ep_infos = dict()
         obs = self.env.reset()
@@ -70,6 +77,10 @@ class PPO(object):
                 update_linear_schedule(self.optimizer, j, num_updates, self.learning_rate)
 
             for step in range(self.n_steps):
+                if self.use_dagger:
+                    state_obs = self.env.get_state_obs()
+                else:
+                    state_obs = None
                 # Sample actions
                 with torch.no_grad():
                     value, action, action_log_prob, recurrent_hidden_states = self.policy.act(
@@ -103,7 +114,8 @@ class PPO(object):
                 masks = (1 - dones.float()).reshape((self.n_envs, 1))
                 bad_masks = torch.ones((self.n_envs, 1), dtype=torch.float)
                 self.rollouts.insert(store_obs, recurrent_hidden_states, action,
-                                     action_log_prob, value, reward, masks, bad_masks)
+                                     action_log_prob, value, reward, masks, bad_masks,
+                                     aux_info=state_obs)
 
             with torch.no_grad():
                 next_value = self.policy.get_value(
@@ -112,7 +124,10 @@ class PPO(object):
 
             self.rollouts.compute_returns(next_value, self.use_gae, self.gamma, self.lam)
 
-            losses = self.update()
+            if not self.use_dagger:
+                losses = self.update()
+            else:
+                losses = self.dagger()
 
             self.rollouts.after_update()
 
@@ -228,6 +243,58 @@ class PPO(object):
         for key in losses:
             losses[key] = safe_mean(losses[key])
 
+        return losses
+
+    def dagger(self):
+        advantages = self.rollouts.returns[:-1] - self.rollouts.value_preds[:-1]
+        adv_mean, adv_std = advantages.mean(), advantages.std()
+        advantages = (advantages - adv_mean) / (adv_std + 1e-5)
+        losses = dict(value_loss=[], policy_loss=[], entropy=[], grad_norm=[], param_norm=[],
+                      clip_ratio=[])
+        for e in range(self.noptepochs):
+            if self.policy.is_recurrent:
+                data_generator = self.rollouts.recurrent_generator(
+                    advantages, self.nminibatches)
+            else:
+                data_generator = self.rollouts.feed_forward_generator(
+                    advantages, self.nminibatches)
+            for mb_idx, sample in enumerate(data_generator):
+                obs_batch, recurrent_hidden_states_batch, actions_batch, \
+                  value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, \
+                  episode_success_batch, adv_targ, next_obs_batch, next_masks_batch, \
+                  expert_obs_batch, *_ = sample
+                with torch.no_grad():
+                    _, expert_actions_batch, _, _ = self.expert_policy.act(expert_obs_batch)
+                action_log_probs, dist_entropy, _ = self.policy.evaluate_actions(
+                    obs_batch, recurrent_hidden_states_batch, masks_batch, expert_actions_batch)
+                dist_entropy = dist_entropy.mean()
+                policy_loss = -torch.clamp(action_log_probs, min=-10).mean()
+                values = self.policy.get_value(obs_batch, recurrent_hidden_states_batch, masks_batch)
+                if self.use_clipped_value_loss:
+                    value_pred_clipped = value_preds_batch + \
+                                         (values - value_preds_batch).clamp(-self.cliprange, self.cliprange)
+                    value_losses = (values - return_batch).pow(2)
+                    value_losses_clipped = (
+                            value_pred_clipped - return_batch).pow(2)
+                    value_loss = 0.5 * torch.max(value_losses,
+                                                 value_losses_clipped).mean()
+                else:
+                    value_loss = 0.5 * (return_batch - values).pow(2).mean()
+                self.optimizer.zero_grad()
+                (value_loss * self.vf_coef + policy_loss - dist_entropy * self.ent_coef).backward()
+                total_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+                self.optimizer.step()
+
+                params = list(filter(lambda p: p[1].grad is not None, self.policy.named_parameters()))
+                param_norm = torch.norm(
+                    torch.stack([torch.norm(p[1].detach().to(self.device)) for p in params]))
+                losses["value_loss"].append(value_loss.item())
+                losses["policy_loss"].append(policy_loss.item())
+                losses["entropy"].append(dist_entropy.item())
+                losses["grad_norm"].append(total_norm.item())
+                losses["param_norm"].append(param_norm.item())
+        for key in losses:
+            losses[key] = safe_mean(losses[key])
         return losses
 
     def save(self, save_path):

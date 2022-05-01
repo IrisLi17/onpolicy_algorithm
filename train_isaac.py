@@ -12,6 +12,7 @@ def parse_arguments():
     parser.add_argument("--load_path", type=str, default=None)
     parser.add_argument("--collect_demo", action="store_true", default=False)
     parser.add_argument("--imitation_pretrain", action="store_true", default=False)
+    parser.add_argument("--expert_policy_path", type=str, default=None)
     args = parser.parse_args()
     return args
 
@@ -54,6 +55,13 @@ def main():
     if config["algo"] == "ppo":
         from onpolicy.ppo.ppo_isaac import PPO
         model = PPO(env, policy, device, **config.get("train", {}))
+        if config.get("train", {}).get("dagger", False):
+            from policies.mlp import MlpGaussianPolicy
+            state_policy = MlpGaussianPolicy(env.num_state_obs, env.num_actions, hidden_size=64)
+            state_policy.to(env.device)
+            checkpoint = torch.load(args.expert_policy_path, map_location=env.device)
+            state_policy.load_state_dict(checkpoint['policy'], strict=False)
+            model.set_expert_policy(state_policy)
     else:
         raise NotImplementedError
 
