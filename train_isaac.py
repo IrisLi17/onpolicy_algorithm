@@ -22,12 +22,12 @@ def main():
     # use a configuration file to pass in arguments
     cfg_module = importlib.import_module(args.config)
     config = cfg_module.config
-    if args.play:
+    if args.play or args.collect_demo:
         config["log_dir"] = None
     else:
         config["log_dir"] = "logs/%s_%s/%s" % (config["algo"], config["env_id"], config["name"])
     logger.configure(config["log_dir"])
-    if config["train"].get("use_wandb", False) and not args.play:
+    if config["train"].get("use_wandb", False) and (not args.play and not args.collect_demo):
         import wandb
         wandb.init(config=config, project=config["algo"] + "_" + config["env_id"], name=config["name"])
     import torch
@@ -148,7 +148,7 @@ def collect_imitation_demo(env, load_path):
         os.remove("imitation_data.pkl")
     obs = env.reset()
     demo = [dict(image_obs=[], state_obs=[], action=[], reward=[]) for _ in range(env.num_envs)]
-    while episode_count < 500:
+    while episode_count < 1000:
         state_obs = env.get_state_obs()
         with torch.no_grad():
             _, actions, _, _ = state_policy.act(state_obs, deterministic=False)

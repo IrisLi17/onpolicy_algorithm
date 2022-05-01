@@ -319,7 +319,7 @@ class PPO(object):
     
     def pretrain(self, obs_buffer, action_buffer):
         optimizer = optim.Adam(self.policy.parameters(), lr=2.5e-4)
-        n_epoch = 30
+        n_epoch = 15
         batch_size = 64
         n_data = obs_buffer.shape[0]
         assert action_buffer.shape[0] == n_data
