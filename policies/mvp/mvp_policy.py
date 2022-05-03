@@ -220,7 +220,7 @@ class PixelActorCritic(nn.Module):
         image_obs = torch.narrow(observations, dim=1, start=0, length=int(observations.shape[1] - self.state_dim))
         image_obs = image_obs.reshape((-1, *self.image_shape))
         # print("In encode obs", image_obs.std())
-        state_obs = torch.narrow(observations, dim=1, start=int(np.prod(self.image_shape)), length=self.state_dim)
+        state_obs = torch.narrow(observations, dim=1, start=int(np.prod(self.image_shape)) * self.history_length, length=self.state_dim)
         obs_emb, obs_feat = self.obs_enc(image_obs)
         obs_emb = obs_emb.reshape((batch_size, self.history_length, -1)).reshape((batch_size, -1))
         obs_feat = obs_feat.reshape((batch_size, self.history_length, -1)).reshape((batch_size, -1))
