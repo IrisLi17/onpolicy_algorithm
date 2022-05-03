@@ -175,7 +175,7 @@ class PPO(object):
             for mb_idx, sample in enumerate(data_generator):
                 obs_batch, recurrent_hidden_states_batch, actions_batch, \
                 value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, \
-                episode_success_batch, adv_targ, next_obs_batch, next_masks_batch, *_ = sample
+                adv_targ, *_ = sample
                 # todo: bug with recurrent generator
                 # print("hxs shape", recurrent_hidden_states_batch.shape, "mask shape", masks_batch.shape)  # (2, 128), (8192, 1)
                 # Reshape to do in a single forward pass for all steps
@@ -261,8 +261,7 @@ class PPO(object):
             for mb_idx, sample in enumerate(data_generator):
                 obs_batch, recurrent_hidden_states_batch, actions_batch, \
                   value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, \
-                  episode_success_batch, adv_targ, next_obs_batch, next_masks_batch, \
-                  expert_obs_batch, *_ = sample
+                  adv_targ, expert_obs_batch, *_ = sample
                 with torch.no_grad():
                     _, expert_actions_batch, _, _ = self.expert_policy.act(expert_obs_batch)
                 action_log_probs, dist_entropy, _ = self.policy.evaluate_actions(
@@ -317,14 +316,14 @@ class PPO(object):
         else:
             self.policy.train()
     
-    def pretrain(self, obs_buffer, action_buffer):
+    def pretrain(self, obs_buffer, action_buffer, is_feature_input=False):
         optimizer = optim.Adam(self.policy.parameters(), lr=2.5e-4)
         n_epoch = 15
         batch_size = 64
         n_data = obs_buffer.shape[0]
         assert action_buffer.shape[0] == n_data
         inds = np.arange(n_data)
-        if self.feature_only:
+        if self.feature_only and not is_feature_input:
             with torch.no_grad():
                 # TODO: divide into minibatch to avoid too much memory usage
                 _n_batch = n_data // 256 if n_data % 256 == 0 else n_data // 256 + 1

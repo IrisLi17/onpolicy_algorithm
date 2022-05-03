@@ -170,11 +170,11 @@ class RolloutStorage(object):
             return_batch = self.returns[:-1].view(-1, 1)[indices]
             masks_batch = self.masks[:-1].view(-1, 1)[indices]
             old_action_log_probs_batch = self.action_log_probs.view(-1, 1)[indices]
-            episode_success_batch = self.episode_success[:-1].view(-1, 1)[indices]
+            # episode_success_batch = self.episode_success[:-1].view(-1, 1)[indices]
             next_indices = np.array([(ind + num_processes) % batch_size for ind in indices])
             next_masks = self.masks[:-1].view(-1, 1)[next_indices]
             next_masks[np.where(next_indices < num_processes)] = 0.
-            next_obs_batch = self.obs[:-1].view(-1, *self.obs.size()[2:])[next_indices]
+            # next_obs_batch = self.obs[:-1].view(-1, *self.obs.size()[2:])[next_indices]
             if advantages is None:
                 adv_targ = None
             else:
@@ -183,12 +183,12 @@ class RolloutStorage(object):
             if self.aux is None:
                 data = obs_batch, recurrent_hidden_states_batch, actions_batch, \
                     value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, \
-                    episode_success_batch, adv_targ, next_obs_batch, next_masks
+                    adv_targ
             else:
                 aux_batch = self.aux.view(-1, *self.aux.size()[2:])[indices]
                 data = obs_batch, recurrent_hidden_states_batch, actions_batch, \
                   value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, \
-                  episode_success_batch, adv_targ, next_obs_batch, next_masks, aux_batch
+                  adv_targ, aux_batch
 
             yield data
 
@@ -210,6 +210,8 @@ class RolloutStorage(object):
             masks_batch = []
             old_action_log_probs_batch = []
             adv_targ = []
+            if self.aux is not None:
+                aux_batch = []
 
             for offset in range(num_envs_per_batch):
                 ind = perm[start_ind + offset]
@@ -225,6 +227,8 @@ class RolloutStorage(object):
                 old_action_log_probs_batch.append(
                     self.action_log_probs[:, ind])
                 adv_targ.append(advantages[:, ind])
+                if self.aux is not None:
+                    aux_batch.append(self.aux[:, ind])
 
             T, N = self.num_steps, num_envs_per_batch
             # These are all tensors of size (T, N, -1)
@@ -237,6 +241,8 @@ class RolloutStorage(object):
             old_action_log_probs_batch = torch.stack(
                 old_action_log_probs_batch, 1)
             adv_targ = torch.stack(adv_targ, 1)
+            if self.aux is not None:
+                aux_batch = torch.stack(aux_batch, 1)
 
             # States is just a (N, -1) tensor
             recurrent_hidden_states_batch = torch.stack(
@@ -252,10 +258,15 @@ class RolloutStorage(object):
             old_action_log_probs_batch = _flatten_helper(T, N, \
                     old_action_log_probs_batch)
             adv_targ = _flatten_helper(T, N, adv_targ)
+            if self.aux is not None:
+                aux_batch = _flatten_helper(T, N, aux_batch)
 
-            yield obs_batch, recurrent_hidden_states_batch, actions_batch, \
-                value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, adv_targ
-
+            if self.aux is None:
+                yield obs_batch, recurrent_hidden_states_batch, actions_batch, \
+                    value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, adv_targ
+            else:
+                yield obs_batch, recurrent_hidden_states_batch, actions_batch, \
+                    value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, adv_targ, aux_batch
 
 class NpRolloutStorage(object):
     def __init__(self, num_steps, num_processes, obs_shape, action_space,
