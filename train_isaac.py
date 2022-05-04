@@ -36,6 +36,7 @@ def main():
     if args.play:
         # pass
         config["env_config"].env.num_envs = 1
+        config["train"] = {}
         # headless = False
     env = config["entry_point"](config["env_config"], headless=headless)
     if config["policy_type"] == "mlp":
