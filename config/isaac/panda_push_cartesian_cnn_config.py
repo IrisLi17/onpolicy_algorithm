@@ -5,20 +5,24 @@ from panda_isaac.base_config import BaseConfig
 sys.path.remove("../isaac_projects/panda-isaac")
 
 
+STATE_HISTORY_LENGTH = 1
+IMAGE_HISTORY_LENGTH = 1
+
+
 class PushConfig(BaseConfig):
     class env(BaseConfig.env):
         seed = 42
         num_envs = 256
-        num_observations = 3 * 84 * 84 + 15
+        num_observations = IMAGE_HISTORY_LENGTH * 3 * 84 * 84 + STATE_HISTORY_LENGTH * 15
         num_actions = 4
-        num_state_obs = 18
+        num_state_obs = 18 * STATE_HISTORY_LENGTH
         max_episode_length = 100
     
     class obs(BaseConfig.obs):
         type = "pixel"
         im_size = 84
-        history_length = 1
-        state_history_length = 1
+        history_length = IMAGE_HISTORY_LENGTH
+        state_history_length = STATE_HISTORY_LENGTH
     
     class cam(BaseConfig.cam):
         view = "ego"
@@ -58,8 +62,8 @@ config = dict(
     env_config=PushConfig(),
     policy_type=("policies.cnn", "CNNStatePolicy"),
     policy=dict(
-        image_shape=(3, 84, 84), 
-        state_dim=15, 
+        image_shape=(IMAGE_HISTORY_LENGTH, 3, 84, 84), 
+        state_dim=15 * STATE_HISTORY_LENGTH, 
         action_dim=4,
         hidden_size=64,
         # num_bin=21,

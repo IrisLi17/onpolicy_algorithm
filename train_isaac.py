@@ -141,7 +141,7 @@ def collect_imitation_demo(env, load_path, image_policy, n_episode, save_feature
     import numpy as np
     import pickle
     from policies.mlp import MlpGaussianPolicy
-    state_policy = MlpGaussianPolicy(18, env.num_actions, hidden_size=64)
+    state_policy = MlpGaussianPolicy(env.cfg.env.num_state_obs, env.num_actions, hidden_size=64)
     state_policy.to(env.device)
     checkpoint = torch.load(load_path, map_location=env.device)
     state_policy.load_state_dict(checkpoint['policy'], strict=False)
