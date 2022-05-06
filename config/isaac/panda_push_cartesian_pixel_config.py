@@ -39,9 +39,9 @@ class PushConfig(BaseConfig):
 config = dict(
     env_id="IsaacPandaPushPixel-v0",
     algo="ppo",
-    name="ik_filter_dense_256w_fov86_state15_1s1i_step128_grad0.5_imitation",
+    name="ik_filter_dense_256w_realcam_hue0.1_bc_1f",
     # name="debug",
-    total_timesteps=int(3e7),
+    total_timesteps=int(1e7),
     entry_point=PandaPushEnv,
     env_config=PushConfig(),
     policy_type=("policies.mvp.mvp_policy", "PixelActorCritic"),
@@ -70,7 +70,7 @@ config = dict(
       cliprange=0.2,
       ent_coef=0.01,
       max_grad_norm=0.5,
-      dagger=True,
+      dagger=False,
       use_wandb=True,
     ),
 )

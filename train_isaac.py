@@ -119,12 +119,13 @@ def evaluate(env, policy, n_episode):
         image.save(filename)
         with torch.no_grad():
             if env.cfg.obs.type == "pixel":
-                obs_image = obs[0, :3 * 224 * 224].reshape((3, 224, 224))
+                obs_image = obs[0, :3 * env.cfg.obs.im_size ** 2].reshape((3, env.cfg.obs.im_size, env.cfg.obs.im_size))
                 obs_image = (obs_image * env.im_std + env.im_mean).permute(1, 2, 0) * 255
                 obs_image = Image.fromarray(obs_image.cpu().numpy().astype(np.uint8))
                 filename = "tmp/tmpobs%d.png" % step_count
                 obs_image.save(filename)
-                obs = policy.encode_obs(obs)
+                if hasattr(policy, "encode_obs"):
+                    obs = policy.encode_obs(obs)
             _, actions, _, _ = policy.act(obs, deterministic=False)
         step_count += 1
         episode_length += 1

@@ -51,9 +51,9 @@ def goal_in_air_cl(_locals, _globals):
 config = dict(
     env_id="IsaacPandaPushCNN-v0",
     algo="ppo",
-    name="test_newarch_bc20",
+    name="1i1s_bc30_lr1.5e-4",
     # name="test_joint_decimal6_1024w_step64_dense",
-    total_timesteps=int(1e7),
+    total_timesteps=int(5e6),
     entry_point=PandaPushEnv,
     env_config=PushConfig(),
     policy_type=("policies.cnn", "CNNStatePolicy"),
@@ -68,10 +68,10 @@ config = dict(
       n_steps=128,
       nminibatches=16,
       # learning_rate=1e-3,
-      learning_rate=2.5e-4,
+      learning_rate=1.5e-4,
       # cliprange=0.1,
-      n_imitation_epoch=20,
-      use_wandb=False
+      n_imitation_epoch=30,
+      use_wandb=True
     ),
     # callback=[goal_in_air_cl],
 )
