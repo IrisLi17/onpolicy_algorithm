@@ -23,7 +23,7 @@ class PushConfig(BaseConfig):
     class cam(BaseConfig.cam):
         view = "ego"
         fov = 86
-        w = 144
+        w = 149
         h = 84
     
     class control(BaseConfig.control):
