@@ -216,11 +216,11 @@ class PixelActorCritic(nn.Module):
     @torch.no_grad()
     def encode_obs(self, observations):
         batch_size = observations.shape[0]
-        assert observations.shape[1] == int(np.prod(self.image_shape)) * self.history_length + self.state_dim
+        assert observations.shape[1] == int(torch.prod(torch.tensor(self.image_shape))) * self.history_length + self.state_dim
         image_obs = torch.narrow(observations, dim=1, start=0, length=int(observations.shape[1] - self.state_dim))
         image_obs = image_obs.reshape((-1, *self.image_shape))
         # print("In encode obs", image_obs.std())
-        state_obs = torch.narrow(observations, dim=1, start=int(np.prod(self.image_shape)) * self.history_length, length=self.state_dim)
+        state_obs = torch.narrow(observations, dim=1, start=int(torch.prod(torch.tensor(self.image_shape))) * self.history_length, length=self.state_dim)
         obs_emb, obs_feat = self.obs_enc(image_obs)
         obs_emb = obs_emb.reshape((batch_size, self.history_length, -1)).reshape((batch_size, -1))
         obs_feat = obs_feat.reshape((batch_size, self.history_length, -1)).reshape((batch_size, -1))
@@ -265,3 +265,19 @@ class PixelActorCritic(nn.Module):
             del state_dict[key]
         print(state_dict.keys())
         return state_dict
+
+    @torch.jit.export
+    def take_action(self, obs):
+        feature_obs = self.encode_obs(obs)
+        # actions = self.act(feature_obs, deterministic=True)
+        image_emb, state_obs = self._process_feature_obs(feature_obs)
+        state_emb = self.state_enc(state_obs)
+        critic_state_emb = self.critic_state_enc(state_obs)
+        # joint_emb = state_emb
+        joint_emb = torch.cat([image_emb, state_emb], dim=1)
+        critic_joint_emb = torch.cat([image_emb, critic_state_emb], dim=-1)
+        # print("In act", joint_emb.shape, joint_emb[0], critic_joint_emb.shape, critic_joint_emb[0])
+
+        actions = self.actor(joint_emb)
+        return actions
+
