@@ -15,7 +15,7 @@ class PPO(object):
     def __init__(self, env, policy: nn.Module, device="cpu", n_steps=1024, nminibatches=32, noptepochs=10, gamma=0.99,
                  lam=0.95, learning_rate=2.5e-4, cliprange=0.2, ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, eps=1e-5,
                  use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False, feature_only=False, 
-                 dagger=False, expert_policy=None, use_wandb=False):
+                 n_imitation_epoch=30, dagger=False, expert_policy=None, use_wandb=False):
         self.env = env
         self.policy = policy
         self.device = device
@@ -33,6 +33,7 @@ class PPO(object):
         self.use_clipped_value_loss = use_clipped_value_loss
         self.use_linear_lr_decay = use_linear_lr_decay
         self.feature_only = feature_only
+        self.n_imitation_epoch = n_imitation_epoch
         self.use_dagger = dagger
         self.expert_policy = expert_policy
         self.use_wandb = use_wandb
@@ -318,7 +319,7 @@ class PPO(object):
     
     def pretrain(self, obs_buffer, action_buffer, is_feature_input=False):
         optimizer = optim.Adam(self.policy.parameters(), lr=2.5e-4)
-        n_epoch = 30
+        n_epoch = self.n_imitation_epoch
         batch_size = 64
         n_data = obs_buffer.shape[0]
         assert action_buffer.shape[0] == n_data
