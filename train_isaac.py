@@ -67,12 +67,12 @@ def main():
         raise NotImplementedError
 
     def callback(locals, globals):
-        if locals["j"] % 50 == 0:
+        if locals["j"] % 20 == 0:
             model.save(os.path.join(config["log_dir"], "model_%d.pt" % locals["j"]))
 
     logger.log(config)
     if args.collect_demo:
-        collect_imitation_demo(env, args.load_path, policy, 1000)
+        collect_imitation_demo(env, args.load_path, policy, 1000, save_feature=config["train"].get("feature_only", False))
     else:
         if not args.play:
             if args.load_path is not None:
@@ -92,7 +92,7 @@ def main():
                         pass
                 obs_buffer = np.concatenate(obs_buffer, axis=0)
                 actions_buffer = np.concatenate(actions_buffer, axis=0)
-                model.pretrain(obs_buffer, actions_buffer, is_feature_input=True)
+                model.pretrain(obs_buffer, actions_buffer, is_feature_input=config["train"].get("feature_only", False))
             model.learn(config["total_timesteps"], [callback] + config.get("callback", []))
         else:
             model.load(args.load_path, eval=True)
@@ -135,7 +135,7 @@ def evaluate(env, policy, n_episode):
             episode_count += 1
             episode_length = 0
 
-def collect_imitation_demo(env, load_path, image_policy, n_episode):
+def collect_imitation_demo(env, load_path, image_policy, n_episode, save_feature=True):
     import torch
     import numpy as np
     import pickle
@@ -152,10 +152,11 @@ def collect_imitation_demo(env, load_path, image_policy, n_episode):
     while episode_count < n_episode:
         state_obs = env.get_state_obs()
         with torch.no_grad():
-            image_features = image_policy.encode_obs(obs)
+            if save_feature:
+                obs = image_policy.encode_obs(obs)
             _, actions, _, _ = state_policy.act(state_obs, deterministic=False)
         for i in range(env.num_envs):
-            demo[i]["image_obs"].append(image_features[i].detach().cpu().numpy())
+            demo[i]["image_obs"].append(obs[i].detach().cpu().numpy())
             demo[i]["state_obs"].append(state_obs[i].detach().cpu().numpy())
             demo[i]["action"].append(actions[i].cpu().numpy())
         obs, reward, done, info = env.step(actions)
