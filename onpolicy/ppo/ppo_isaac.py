@@ -93,15 +93,6 @@ class PPO(object):
                 obs, reward, dones, info = self.env.step(action)
                 step_time += time.time() - step_start
                 reward = reward.float().unsqueeze(dim=-1)
-                if self.feature_only:
-                    store_obs = self.policy.encode_obs(obs)
-                else:
-                    store_obs = obs
-                with torch.no_grad():
-                    _next_value = self.policy.get_value(
-                        store_obs, None, None).detach()
-                    # If terminate due to time limit, mimic infinite horizon
-                    reward += self.gamma * _next_value * info["time_out"].float().unsqueeze(dim=-1)
                 self.num_timesteps += self.n_envs
 
                 maybe_ep_info = info.get('episode')
@@ -114,6 +105,16 @@ class PPO(object):
                 # If done then clean the history of observations.
                 masks = (1 - dones.float()).reshape((self.n_envs, 1))
                 bad_masks = torch.ones((self.n_envs, 1), dtype=torch.float)
+                if self.feature_only:
+                    store_obs = self.policy.encode_obs(obs)
+                else:
+                    store_obs = obs
+                with torch.no_grad():
+                    _next_value = self.policy.get_value(
+                        store_obs, recurrent_hidden_states, masks).detach()
+                    # If terminate due to time limit, mimic infinite horizon
+                    reward += self.gamma * _next_value * info["time_out"].float().unsqueeze(dim=-1)
+                
                 self.rollouts.insert(store_obs, recurrent_hidden_states, action,
                                      action_log_prob, value, reward, masks, bad_masks,
                                      aux_info=state_obs)
@@ -318,6 +319,7 @@ class PPO(object):
             self.policy.train()
     
     def pretrain(self, obs_buffer, action_buffer, is_feature_input=False):
+        assert not self.policy.is_recurrent
         optimizer = optim.Adam(self.policy.parameters(), lr=2.5e-4)
         n_epoch = self.n_imitation_epoch
         batch_size = 64
@@ -351,6 +353,11 @@ class PPO(object):
                 optimizer.step()
                 losses.append(loss.item())
             print(e, np.mean(losses))
+
+    def pretrain_recurrent(self, trajs, is_feature_input=False):
+        assert self.policy.is_recurrent
+        raise NotImplementedError
+
 
 def safe_mean(arr):
     """
