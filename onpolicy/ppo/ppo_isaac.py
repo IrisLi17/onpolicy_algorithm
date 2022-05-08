@@ -66,6 +66,8 @@ class PPO(object):
         start = time.time()
         num_updates = int(total_timesteps) // self.n_steps // self.n_envs
 
+        start_tuning = False
+
         for j in range(num_updates):
             step_time = 0
             if not isinstance(callback, list):
@@ -126,10 +128,12 @@ class PPO(object):
 
             self.rollouts.compute_returns(next_value, self.use_gae, self.gamma, self.lam)
 
-            if not self.use_dagger:
+            if (not self.use_dagger) or (self.use_dagger and start_tuning):
                 losses = self.update()
             else:
                 losses = self.dagger()
+                if j > 10 and torch.mean(torch.tensor(ep_infos["is_success"]).float()).item() > 0.6:
+                    start_tuning = True
 
             self.rollouts.after_update()
 
