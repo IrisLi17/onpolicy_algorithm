@@ -83,7 +83,7 @@ class CNNStatePolicy(ActorCriticPolicy):
         if deterministic:
             action = action_dist.mean
         else:
-            action = action_dist.sample()
+            action = action_dist.sample([])
         log_probs = torch.sum(action_dist.log_prob(action), dim=-1, keepdim=True)
         return value, action, log_probs, rnn_hxs
     
@@ -171,7 +171,7 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         if deterministic:
             action = action_dist.mean
         else:
-            action = action_dist.sample()
+            action = action_dist.sample([])
         log_probs = torch.sum(action_dist.log_prob(action), dim=-1, keepdim=True)
         return value, action, log_probs, rnn_hxs
     
