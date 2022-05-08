@@ -111,6 +111,8 @@ def evaluate(env, policy, n_episode):
         shutil.rmtree("tmp")
     os.makedirs("tmp", exist_ok=True)
     obs = env.reset()
+    recurrent_hidden_state = torch.zeros(env.num_envs, policy.recurrent_hidden_state_size, dtype=torch.float, device=env.device)
+    recurrent_mask = torch.ones(1, 1, dtype=torch.float, device=env.device)
     while episode_count < n_episode:
         env.render()
         image = env.get_camera_image()
@@ -126,10 +128,11 @@ def evaluate(env, policy, n_episode):
                 obs_image.save(filename)
                 if hasattr(policy, "encode_obs"):
                     obs = policy.encode_obs(obs)
-            _, actions, _, _ = policy.act(obs, deterministic=False)
+            _, actions, _, recurrent_hidden_state = policy.act(obs, recurrent_hidden_state, recurrent_mask, deterministic=False)
         step_count += 1
         episode_length += 1
         obs, reward, done, info = env.step(actions)
+        recurrent_mask = (1 - done.float()).reshape((env.num_envs, 1))
         if done[0]:
             print(obs[0])
             print("episode length", episode_length, info)
