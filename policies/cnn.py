@@ -1,8 +1,8 @@
-from turtle import forward, hideturtle
 from policies.base import ActorCriticPolicy
 import torch
 import torch.nn as nn
 import numpy as np
+from utils.distributions import Normal
 
 
 class CNNStatePolicy(ActorCriticPolicy):
@@ -74,7 +74,7 @@ class CNNStatePolicy(ActorCriticPolicy):
         pi_feature = self.pi_layer_norm(torch.cat([image_feature, pi_state_feature], dim=-1))
         vf_feature = self.vf_layer_norm(torch.cat([image_feature, vf_state_feature], dim=-1))
         action_mean = self.pi_mean_layers(pi_feature)
-        dist = torch.distributions.Normal(loc=action_mean, scale=torch.exp(self.pi_logstd))
+        dist = Normal(loc=action_mean, scale=torch.exp(self.pi_logstd))
         value = self.vf_layers(vf_feature)
         return value, dist, rnn_hxs
     
@@ -142,7 +142,7 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         nn.init.orthogonal_(self.pi_mean_layers[-1].weight, gain=0.01)
         nn.init.constant_(self.pi_mean_layers[-1].bias, 0.)
     
-    def forward(self, obs, rnn_hxs=None, rnn_masks=None):
+    def forward(self, obs, rnn_hxs: torch.Tensor, rnn_masks: torch.Tensor):
         assert obs.shape[-1] == torch.prod(torch.tensor(self.image_shape)) + self.state_dim
         image_obs = torch.narrow(obs, dim=1, start=0, length=torch.prod(torch.tensor(self.image_shape))).reshape((-1, *self.image_shape))
         state_obs = torch.narrow(obs, dim=1, start=torch.prod(torch.tensor(self.image_shape)), length=self.state_dim)
@@ -162,7 +162,7 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         output_feature = torch.stack(output_feature, dim=0).reshape((T * N, -1))
         rnn_hxs = torch.cat([lstm_hxs, lstm_cell], dim=-1)
         action_mean = self.pi_mean_layers(output_feature)
-        action_dist = torch.distributions.Normal(action_mean, torch.exp(self.pi_logstd))
+        action_dist = Normal(action_mean, torch.exp(self.pi_logstd))
         value = self.vf_layers(output_feature)
         return value, action_dist, rnn_hxs
     
@@ -180,3 +180,9 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         log_probs = torch.sum(action_dist.log_prob(actions), dim=-1, keepdim=True)
         entropy = action_dist.entropy()
         return log_probs, entropy, rnn_hxs
+    
+    @torch.jit.export
+    def take_action(self, obs, rnn_hxs, rnn_masks):
+        _, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks)
+        action = action_dist.mean
+        return action, rnn_hxs
