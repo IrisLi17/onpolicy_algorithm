@@ -5,19 +5,21 @@ from panda_isaac.base_config import BaseConfig
 sys.path.remove("../isaac_projects/panda-isaac")
 
 
+STATE_HISTORY_LENGTH = 1
+
+
 class PushConfig(BaseConfig):
     class env(BaseConfig.env):
         seed = 42
         num_envs = 1024
-        # num_observations = 3 * 224 * 224 + 12
-        num_observations = (3 + 15) * 1
+        num_observations = (3 + 15) * STATE_HISTORY_LENGTH
         num_actions = 4
-        num_state_obs = 18
+        num_state_obs = 18 * STATE_HISTORY_LENGTH
         max_episode_length = 100
     
     class obs(BaseConfig.obs):
         type = "state"
-        state_history_length = 1
+        state_history_length = STATE_HISTORY_LENGTH
     
     class control(BaseConfig.control):
         decimal = 6
@@ -28,6 +30,7 @@ class PushConfig(BaseConfig):
     
     class reward(BaseConfig.reward):
         type = "dense"
+        contact_coef = 0
 
 
 def goal_in_air_cl(_locals, _globals):
@@ -44,7 +47,7 @@ def goal_in_air_cl(_locals, _globals):
 config = dict(
     env_id="IsaacPandaPushState-v0",
     algo="ppo",
-    name="test_ik_dense_filter_obs15_oldj_sanity",
+    name="nocam_urdf_contact0",
     # name="test_joint_decimal6_1024w_step64_dense",
     total_timesteps=int(1e8),
     entry_point=PandaPushEnv,
@@ -61,7 +64,7 @@ config = dict(
       # learning_rate=1e-3,
       learning_rate=2.5e-4,
       # cliprange=0.1,
-      use_wandb=False
+      use_wandb=True
     ),
     # callback=[goal_in_air_cl],
 )

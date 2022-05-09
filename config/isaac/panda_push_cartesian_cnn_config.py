@@ -18,11 +18,15 @@ class PushConfig(BaseConfig):
         num_state_obs = 18 * STATE_HISTORY_LENGTH
         max_episode_length = 100
     
+    class asset(BaseConfig.asset):
+        robot_urdf = "urdf/franka_description/robots/franka_panda_cam.urdf"
+    
     class obs(BaseConfig.obs):
         type = "pixel"
         im_size = 84
         history_length = IMAGE_HISTORY_LENGTH
         state_history_length = STATE_HISTORY_LENGTH
+        noise = True
     
     class cam(BaseConfig.cam):
         view = "ego"
@@ -39,6 +43,7 @@ class PushConfig(BaseConfig):
     
     class reward(BaseConfig.reward):
         type = "dense"
+        contact_coef = 0
 
 
 def goal_in_air_cl(_locals, _globals):
@@ -55,9 +60,9 @@ def goal_in_air_cl(_locals, _globals):
 config = dict(
     env_id="IsaacPandaPushCNN-v0",
     algo="ppo",
-    name="lstm_test",
+    name="lstm_dagger_tuning_statenoise_camurdf",
     # name="test_joint_decimal6_1024w_step64_dense",
-    total_timesteps=int(5e6),
+    total_timesteps=int(1e7),
     entry_point=PandaPushEnv,
     env_config=PushConfig(),
     # policy_type=("policies.cnn", "CNNStatePolicy"),
