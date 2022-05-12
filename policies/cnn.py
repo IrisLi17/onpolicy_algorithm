@@ -92,6 +92,19 @@ class CNNStatePolicy(ActorCriticPolicy):
         log_probs = torch.sum(action_dist.log_prob(actions), dim=-1, keepdim=True)
         entropy = action_dist.entropy()
         return log_probs, entropy, rnn_hxs
+    
+    @torch.jit.export
+    def take_action(self, obs):
+        assert obs.shape[-1] == torch.prod(torch.tensor(self.image_shape)) + self.state_dim
+        batch_size = obs.shape[0]
+        image_obs = torch.narrow(obs, dim=1, start=0, length=torch.prod(torch.tensor(self.image_shape)))
+        image_obs = image_obs.reshape((-1, *self.image_shape[1:]))  # (batch_size * L, C, H, W)
+        state_obs = torch.narrow(obs, dim=1, start=torch.prod(torch.tensor(self.image_shape)), length=self.state_dim)
+        image_feature = self.image_projector(self.image_encoder(image_obs).reshape((batch_size, -1)))
+        pi_state_feature = self.pi_state_encoder(state_obs)
+        pi_feature = self.pi_layer_norm(torch.cat([image_feature, pi_state_feature], dim=-1))
+        action_mean = self.pi_mean_layers(pi_feature)
+        return action_mean
 
 
 class CNNStateHistoryPolicy(ActorCriticPolicy):

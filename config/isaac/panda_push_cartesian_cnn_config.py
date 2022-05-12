@@ -43,7 +43,7 @@ class PushConfig(BaseConfig):
     
     class reward(BaseConfig.reward):
         type = "dense"
-        contact_coef = 0
+        contact_coef = -0.1
 
 
 def goal_in_air_cl(_locals, _globals):
@@ -60,7 +60,8 @@ def goal_in_air_cl(_locals, _globals):
 config = dict(
     env_id="IsaacPandaPushCNN-v0",
     algo="ppo",
-    name="lstm_dagger_tuning_statenoise_camurdf",
+    name="lstm_oldcam_dagger_tuning_statenoise_camurdf_contact-0.1",
+    # name="1i1s_oldcam_bc30_statenoise_camurdf_contact-0.1",
     # name="test_joint_decimal6_1024w_step64_dense",
     total_timesteps=int(1e7),
     entry_point=PandaPushEnv,
