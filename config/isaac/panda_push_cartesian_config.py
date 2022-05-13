@@ -34,7 +34,7 @@ class PushConfig(BaseConfig):
     
     class safety(BaseConfig.safety):
         brake_on_contact = True
-        contact_force_th = 10.0
+        contact_force_th = 100.0
 
 
 def goal_in_air_cl(_locals, _globals):
@@ -54,7 +54,7 @@ def contact_force_th_cl(_locals, _globals):
         ep_infos = _locals["ep_infos"]
         success_rate = torch.mean(torch.tensor(ep_infos["is_success"]).float()).item()
         cur_contact_force_th = _locals["self"].env.cfg.safety.contact_force_th
-        if success_rate > 0.6:
+        if success_rate > 0.8:
             _locals["self"].env.set_contact_force_th(max(0.5 * cur_contact_force_th, 1.0))
         print("Contact force threshold =", _locals["self"].env.cfg.safety.contact_force_th)
 
@@ -62,7 +62,7 @@ def contact_force_th_cl(_locals, _globals):
 config = dict(
     env_id="IsaacPandaPushState-v0",
     algo="ppo",
-    name="nocam_urdf_terminatecl_pen0",
+    name="nocam_urdf_terminatecl0.8_pen0",
     # name="test_joint_decimal6_1024w_step64_dense",
     total_timesteps=int(1e8),
     entry_point=PandaPushEnv,
