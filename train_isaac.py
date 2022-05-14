@@ -38,7 +38,10 @@ def main():
         config["env_config"].env.num_envs = 1
         config["train"] = {}
         # headless = False
-    env = config["entry_point"](config["env_config"], headless=headless)
+    if isinstance(config["env_config"], dict):
+        env = config["entry_point"](**config["env_config"])
+    else:
+        env = config["entry_point"](config["env_config"], headless=headless)
     if config["policy_type"] == "mlp":
         from policies.mlp import MlpGaussianPolicy
         policy = MlpGaussianPolicy(env.num_obs, env.num_actions, **config["policy"])
@@ -79,20 +82,7 @@ def main():
                 model.load(args.load_path, eval=False)
                 print("loaded", args.load_path)
             if args.imitation_pretrain:
-                import pickle
-                import numpy as np
-                obs_buffer, actions_buffer = [], []
-                with open("imitation_data.pkl", "rb") as f:
-                    try:
-                        while True:
-                            traj = pickle.load(f)
-                            obs_buffer.append(traj["image_obs"])
-                            actions_buffer.append(traj["action"])
-                    except EOFError:
-                        pass
-                obs_buffer = np.concatenate(obs_buffer, axis=0)
-                actions_buffer = np.concatenate(actions_buffer, axis=0)
-                model.pretrain(obs_buffer, actions_buffer, is_feature_input=config["train"].get("feature_only", False))
+                model.pretrain("imitation_data.pkl", is_feature_input=config["train"].get("feature_only", False))
             model.learn(config["total_timesteps"], [callback] + config.get("callback", []))
         else:
             model.load(args.load_path, eval=True)

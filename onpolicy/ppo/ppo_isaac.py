@@ -322,8 +322,23 @@ class PPO(object):
         else:
             self.policy.train()
     
-    def pretrain(self, obs_buffer, action_buffer, is_feature_input=False):
+    def pretrain(self, dataset_path, is_feature_input=False):
+        if self.policy.is_recurrent:
+            return self.pretrain_recurrent(dataset_path)
         assert not self.policy.is_recurrent
+        import pickle
+        import numpy as np
+        obs_buffer, actions_buffer = [], []
+        with open(dataset_path, "rb") as f:
+            try:
+                while True:
+                    traj = pickle.load(f)
+                    obs_buffer.append(traj["image_obs"])
+                    actions_buffer.append(traj["action"])
+            except EOFError:
+                pass
+        obs_buffer = np.concatenate(obs_buffer, axis=0)
+        actions_buffer = np.concatenate(actions_buffer, axis=0)
         optimizer = optim.Adam(self.policy.parameters(), lr=2.5e-4)
         n_epoch = self.n_imitation_epoch
         batch_size = 64
@@ -358,10 +373,33 @@ class PPO(object):
                 losses.append(loss.item())
             print(e, np.mean(losses))
 
-    def pretrain_recurrent(self, trajs, is_feature_input=False):
+    def pretrain_recurrent(self, dataset_path, is_feature_input=False):
         assert self.policy.is_recurrent
-        raise NotImplementedError
-
+        import pickle
+        optimizer = optim.Adam(self.policy.parameters(), lr=2.5e-4)
+        obs_list, actions_list = [], []
+        with open(dataset_path, "rb") as f:
+            try:
+                while True:
+                    traj = pickle.load(f)
+                    obs_list.append(torch.from_numpy(traj["image_obs"]).to(self.device))
+                    actions_list.append(torch.from_numpy(traj["action"]).to(self.device))
+            except EOFError:
+                pass
+        losses = deque(maxlen=100)
+        recurrent_hidden_state = torch.zeros(1, self.policy.recurrent_hidden_state_size, dtype=torch.float, device=self.device)
+        for e in range(self.n_imitation_epoch):
+            for b_idx in range(len(obs_list)):
+                recurrent_mask = torch.ones(obs_list[b_idx].shape[0], 1, dtype=torch.float, device=self.device)
+                action_log_probs, _, _ = self.policy.evaluate_actions(
+                    obs_list[b_idx], recurrent_hidden_state, recurrent_mask, actions_list[b_idx]
+                )
+                loss = -action_log_probs.mean()
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                losses.append(loss.item())
+            print(e, np.mean(losses))
 
 def safe_mean(arr):
     """
