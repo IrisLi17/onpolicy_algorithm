@@ -6,21 +6,34 @@ sys.path.remove("../isaac_projects/panda-isaac")
 
 
 STATE_HISTORY_LENGTH = 1
+IMAGE_HISTORY_LENGTH = 1
 
 
 class PushConfig(BaseConfig):
     class env(BaseConfig.env):
         seed = 42
-        num_envs = 1024
-        num_observations = (3 + 15) * STATE_HISTORY_LENGTH
+        num_envs = 256
+        num_observations = IMAGE_HISTORY_LENGTH * 3 * 84 * 84 + STATE_HISTORY_LENGTH * 15
         num_actions = 4
         num_state_obs = 18 * STATE_HISTORY_LENGTH
         max_episode_length = 100
-        init_goal_in_air = 0.0
+    
+    class asset(BaseConfig.asset):
+        robot_urdf = "urdf/franka_description/robots/franka_panda_cam.urdf"
     
     class obs(BaseConfig.obs):
-        type = "state"
+        type = "pixel"
+        im_size = 84
+        history_length = IMAGE_HISTORY_LENGTH
         state_history_length = STATE_HISTORY_LENGTH
+        noise = True
+    
+    class cam(BaseConfig.cam):
+        view = "ego"
+        fov = 86
+        w = 149
+        h = 84
+        loc_r = [180, -45.0, 180.0]
     
     class control(BaseConfig.control):
         decimal = 6
@@ -56,30 +69,43 @@ def contact_force_th_cl(_locals, _globals):
         success_rate = torch.mean(torch.tensor(ep_infos["is_success"]).float()).item()
         cur_contact_force_th = _locals["self"].env.cfg.safety.contact_force_th
         if success_rate > 0.6:
-            _locals["self"].env.set_contact_force_th(max(0.5 * cur_contact_force_th, 2.0))
+            _locals["self"].env.set_contact_force_th(max(0.5 * cur_contact_force_th, 5.0))
         print("Contact force threshold =", _locals["self"].env.cfg.safety.contact_force_th)
 
 
 config = dict(
-    env_id="IsaacPandaPushState-v0",
+    env_id="IsaacPandaPushCNN-v0",
     algo="ppo",
-    name="clipfinger_cfth30cl0.6_force2_pen-0.1",
+    name="lstm_45cam_bc30_th30cl0.6_final5_pen-0.1",
+    # name="1i1s_oldcam_bc30_statenoise_camurdf_contact-0.1",
     # name="test_joint_decimal6_1024w_step64_dense",
-    total_timesteps=int(1e8),
+    total_timesteps=int(1e7),
     entry_point=PandaPushEnv,
     env_config=PushConfig(),
-    policy_type="mlp",
+    # policy_type=("policies.cnn", "CNNStatePolicy"),
+    # policy=dict(
+    #     image_shape=(IMAGE_HISTORY_LENGTH, 3, 84, 84), 
+    #     state_dim=15 * STATE_HISTORY_LENGTH, 
+    #     action_dim=4,
+    #     hidden_size=64,
+    #     # num_bin=21,
+    # ),
+    policy_type=("policies.cnn", "CNNStateHistoryPolicy"),
     policy=dict(
+        image_shape=(3, 84, 84),
+        state_dim=15,
+        action_dim=4,
         hidden_size=64,
-        # num_bin=21,
+        lstm_hidden_size=64,
     ),
     train=dict(
-      # n_steps=1024,
-      n_steps=64,
-      nminibatches=32,
+      n_steps=128,
+      nminibatches=16,
       # learning_rate=1e-3,
-      learning_rate=2.5e-4,
+      learning_rate=1.5e-4,
       # cliprange=0.1,
+      n_imitation_epoch=30,
+      dagger=False,
       use_wandb=True
     ),
     callback=[contact_force_th_cl],
