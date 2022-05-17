@@ -143,6 +143,10 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
             nn.Linear(lstm_hidden_size, hidden_size), nn.ReLU(),
             nn.Linear(hidden_size, 1)
         )
+        self.aux_layer = nn.Sequential(
+            nn.Linear(lstm_hidden_size, hidden_size), nn.ReLU(), nn.Linear(hidden_size, 3)
+        )
+        self.aux_metric = nn.L1Loss()
         self.is_recurrent = True
         self.recurrent_hidden_state_size = 2 * lstm_hidden_size
         self._initialize()
@@ -155,7 +159,7 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         nn.init.orthogonal_(self.pi_mean_layers[-1].weight, gain=0.01)
         nn.init.constant_(self.pi_mean_layers[-1].bias, 0.)
     
-    def forward(self, obs, rnn_hxs: torch.Tensor, rnn_masks: torch.Tensor):
+    def _forward_feature(self, obs, rnn_hxs: torch.Tensor, rnn_masks: torch.Tensor):
         assert obs.shape[-1] == torch.prod(torch.tensor(self.image_shape)) + self.state_dim
         image_obs = torch.narrow(obs, dim=1, start=0, length=torch.prod(torch.tensor(self.image_shape))).reshape((-1, *self.image_shape))
         state_obs = torch.narrow(obs, dim=1, start=torch.prod(torch.tensor(self.image_shape)), length=self.state_dim)
@@ -174,6 +178,10 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
             output_feature.append(lstm_hxs)
         output_feature = torch.stack(output_feature, dim=0).reshape((T * N, -1))
         rnn_hxs = torch.cat([lstm_hxs, lstm_cell], dim=-1)
+        return output_feature, rnn_hxs
+
+    def forward(self, obs, rnn_hxs: torch.Tensor, rnn_masks: torch.Tensor):
+        output_feature, rnn_hxs = self._forward_feature(obs, rnn_hxs, rnn_masks)
         action_mean = self.pi_mean_layers(output_feature)
         action_dist = Normal(action_mean, torch.exp(self.pi_logstd))
         value = self.vf_layers(output_feature)
@@ -193,6 +201,13 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         log_probs = torch.sum(action_dist.log_prob(actions), dim=-1, keepdim=True)
         entropy = action_dist.entropy()
         return log_probs, entropy, rnn_hxs
+    
+    def compute_aux_loss(self, obs, rnn_hxs, rnn_masks, aux_input):
+        output_feature, rnn_hxs = self._forward_feature(obs, rnn_hxs, rnn_masks)
+        predict = self.aux_layer(output_feature)
+        aux_ground_truth = torch.narrow(aux_input, dim=1, start=0, length=3)
+        loss = self.aux_metric(predict, aux_ground_truth.detach())
+        return loss
     
     @torch.jit.export
     def take_action(self, obs, rnn_hxs, rnn_masks):

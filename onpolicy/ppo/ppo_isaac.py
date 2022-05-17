@@ -15,7 +15,7 @@ class PPO(object):
     def __init__(self, env, policy: nn.Module, device="cpu", n_steps=1024, nminibatches=32, noptepochs=10, gamma=0.99,
                  lam=0.95, learning_rate=2.5e-4, cliprange=0.2, ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, eps=1e-5,
                  use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False, feature_only=False, 
-                 n_imitation_epoch=30, dagger=False, expert_policy=None, use_wandb=False):
+                 n_imitation_epoch=30, dagger=False, expert_policy=None, use_aux_loss=False, use_wandb=False):
         self.env = env
         self.policy = policy
         self.device = device
@@ -36,6 +36,7 @@ class PPO(object):
         self.n_imitation_epoch = n_imitation_epoch
         self.use_dagger = dagger
         self.expert_policy = expert_policy
+        self.use_aux_loss = use_aux_loss
         self.use_wandb = use_wandb
 
         self.n_envs = self.env.num_envs
@@ -44,7 +45,7 @@ class PPO(object):
                                        (self.env.num_obs,) if not self.feature_only else (self.policy.obs_feature_size,),
                                        self.env.num_actions,
                                        self.policy.recurrent_hidden_state_size,
-                                       aux_shape=(self.env.num_state_obs,) if dagger else None)
+                                       aux_shape=(self.env.num_state_obs,))
 
         self.optimizer = optim.Adam(policy.parameters(), lr=learning_rate, eps=eps)
 
@@ -80,7 +81,7 @@ class PPO(object):
                 update_linear_schedule(self.optimizer, j, num_updates, self.learning_rate)
 
             for step in range(self.n_steps):
-                if self.use_dagger:
+                if True:
                     state_obs = self.env.get_state_obs()
                 else:
                     state_obs = None
@@ -168,7 +169,7 @@ class PPO(object):
         advantages = (advantages - adv_mean) / (adv_std + 1e-5)
 
         losses = dict(value_loss=[], policy_loss=[], entropy=[], grad_norm=[], param_norm=[],
-                      clip_ratio=[])
+                      clip_ratio=[], aux_loss=[])
 
         for e in range(self.noptepochs):
             if self.policy.is_recurrent:
@@ -181,13 +182,19 @@ class PPO(object):
             for mb_idx, sample in enumerate(data_generator):
                 obs_batch, recurrent_hidden_states_batch, actions_batch, \
                 value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, \
-                adv_targ, *_ = sample
+                adv_targ, aux_batch, *_ = sample
                 # todo: bug with recurrent generator
                 # print("hxs shape", recurrent_hidden_states_batch.shape, "mask shape", masks_batch.shape)  # (2, 128), (8192, 1)
                 # Reshape to do in a single forward pass for all steps
                 action_log_probs, dist_entropy, _ = self.policy.evaluate_actions(
                     obs_batch, recurrent_hidden_states_batch, masks_batch,
                     actions_batch)
+                if self.use_aux_loss:
+                    aux_loss = self.policy.compute_aux_loss(
+                        obs_batch, recurrent_hidden_states_batch, masks_batch, aux_batch
+                    )
+                else:
+                    aux_loss = torch.tensor(np.nan)
                 dist_entropy = dist_entropy.mean()
 
                 ratio = torch.exp(action_log_probs -
@@ -212,7 +219,7 @@ class PPO(object):
 
                 self.optimizer.zero_grad()
                 (value_loss * self.vf_coef + action_loss -
-                 dist_entropy * self.ent_coef).backward()
+                 dist_entropy * self.ent_coef + aux_loss).backward()
                 total_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 # print('total norm', total_norm)
                 self.optimizer.step()
@@ -245,6 +252,7 @@ class PPO(object):
                 losses["grad_norm"].append(total_norm.item())
                 losses["param_norm"].append(param_norm.item())
                 losses["clip_ratio"].append(clipped_ratio)
+                losses["aux_loss"].append(aux_loss.item())
 
         for key in losses:
             losses[key] = safe_mean(losses[key])
@@ -256,7 +264,7 @@ class PPO(object):
         adv_mean, adv_std = advantages.mean(), advantages.std()
         advantages = (advantages - adv_mean) / (adv_std + 1e-5)
         losses = dict(value_loss=[], policy_loss=[], entropy=[], grad_norm=[], param_norm=[],
-                      clip_ratio=[])
+                      clip_ratio=[], aux_loss=[])
         for e in range(self.noptepochs):
             if self.policy.is_recurrent:
                 data_generator = self.rollouts.recurrent_generator(
@@ -274,6 +282,11 @@ class PPO(object):
                     obs_batch, recurrent_hidden_states_batch, masks_batch, expert_actions_batch)
                 dist_entropy = dist_entropy.mean()
                 policy_loss = -torch.clamp(action_log_probs, min=-10).mean()
+                if self.use_aux_loss:
+                    aux_loss = self.policy.compute_aux_loss(
+                        obs_batch, recurrent_hidden_states_batch, masks_batch, expert_obs_batch)
+                else:
+                    aux_loss = torch.tensor(np.nan)
                 values = self.policy.get_value(obs_batch, recurrent_hidden_states_batch, masks_batch)
                 if self.use_clipped_value_loss:
                     value_pred_clipped = value_preds_batch + \
@@ -286,7 +299,7 @@ class PPO(object):
                 else:
                     value_loss = 0.5 * (return_batch - values).pow(2).mean()
                 self.optimizer.zero_grad()
-                (value_loss * self.vf_coef + policy_loss - dist_entropy * self.ent_coef).backward()
+                (value_loss * self.vf_coef + policy_loss - dist_entropy * self.ent_coef + aux_loss).backward()
                 total_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
@@ -298,6 +311,7 @@ class PPO(object):
                 losses["entropy"].append(dist_entropy.item())
                 losses["grad_norm"].append(total_norm.item())
                 losses["param_norm"].append(param_norm.item())
+                losses["aux_loss"].append(aux_loss.item())
         for key in losses:
             losses[key] = safe_mean(losses[key])
         return losses
