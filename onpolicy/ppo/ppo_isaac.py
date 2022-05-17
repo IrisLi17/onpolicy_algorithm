@@ -15,7 +15,7 @@ class PPO(object):
     def __init__(self, env, policy: nn.Module, device="cpu", n_steps=1024, nminibatches=32, noptepochs=10, gamma=0.99,
                  lam=0.95, learning_rate=2.5e-4, cliprange=0.2, ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, eps=1e-5,
                  use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False, feature_only=False, 
-                 n_imitation_epoch=30, dagger=False, expert_policy=None, use_aux_loss=False, use_wandb=False):
+                 n_imitation_epoch=30, dagger=False, expert_policy=None, aux_loss_coef=0.0, use_wandb=False):
         self.env = env
         self.policy = policy
         self.device = device
@@ -36,7 +36,7 @@ class PPO(object):
         self.n_imitation_epoch = n_imitation_epoch
         self.use_dagger = dagger
         self.expert_policy = expert_policy
-        self.use_aux_loss = use_aux_loss
+        self.aux_loss_coef = aux_loss_coef
         self.use_wandb = use_wandb
 
         self.n_envs = self.env.num_envs
@@ -189,7 +189,7 @@ class PPO(object):
                 action_log_probs, dist_entropy, _ = self.policy.evaluate_actions(
                     obs_batch, recurrent_hidden_states_batch, masks_batch,
                     actions_batch)
-                if self.use_aux_loss:
+                if self.aux_loss_coef > 0:
                     aux_loss = self.policy.compute_aux_loss(
                         obs_batch, recurrent_hidden_states_batch, masks_batch, aux_batch
                     )
@@ -219,7 +219,7 @@ class PPO(object):
 
                 self.optimizer.zero_grad()
                 (value_loss * self.vf_coef + action_loss -
-                 dist_entropy * self.ent_coef + aux_loss).backward()
+                 dist_entropy * self.ent_coef + self.aux_loss_coef * aux_loss).backward()
                 total_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 # print('total norm', total_norm)
                 self.optimizer.step()
@@ -282,7 +282,7 @@ class PPO(object):
                     obs_batch, recurrent_hidden_states_batch, masks_batch, expert_actions_batch)
                 dist_entropy = dist_entropy.mean()
                 policy_loss = -torch.clamp(action_log_probs, min=-10).mean()
-                if self.use_aux_loss:
+                if self.aux_loss_coef > 0:
                     aux_loss = self.policy.compute_aux_loss(
                         obs_batch, recurrent_hidden_states_batch, masks_batch, expert_obs_batch)
                 else:
@@ -299,7 +299,7 @@ class PPO(object):
                 else:
                     value_loss = 0.5 * (return_batch - values).pow(2).mean()
                 self.optimizer.zero_grad()
-                (value_loss * self.vf_coef + policy_loss - dist_entropy * self.ent_coef + aux_loss).backward()
+                (value_loss * self.vf_coef + policy_loss - dist_entropy * self.ent_coef + self.aux_loss_coef * aux_loss).backward()
                 total_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
