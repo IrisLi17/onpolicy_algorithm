@@ -139,6 +139,15 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         with torch.no_grad():
             image_feature_dim = self.image_encoder(torch.zeros(1, *self.image_shape)).shape[-1]
         self.image_projector = nn.Linear(image_feature_dim, hidden_size)
+        self.critic_image_encoder = nn.Sequential(
+            nn.Conv2d(self.image_shape[0], 2 * self.image_shape[0], 8, 4, 0),
+            nn.ReLU(),
+            nn.Conv2d(2 * self.image_shape[0], 4 * self.image_shape[0], 4, 2, 0),
+            nn.ReLU(),
+            nn.Conv2d(4 * self.image_shape[0], 4 * self.image_shape[0], 3, 1, 0),
+            nn.ReLU(), nn.Flatten(),
+        )
+        self.critic_image_projector = nn.Linear(image_feature_dim, hidden_size)
         self.state_encoder = nn.Sequential(
             nn.Linear(self.state_dim, hidden_size), nn.ReLU(),
             nn.Linear(hidden_size, hidden_size)
@@ -194,13 +203,14 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         output_feature = torch.stack(output_feature, dim=0).reshape((T * N, -1))
         new_rnn_hxs = torch.cat([lstm_hxs, lstm_cell], dim=-1)
         if forward_value:
+            critic_image_feature = self.critic_image_projector(self.critic_image_encoder(image_obs))
             if self.previ_dim > 0:
                 assert previ_obs.shape[1] == self.previ_dim
                 critic_state_obs = torch.cat([state_obs, previ_obs], dim=-1)
             else:
                 critic_state_obs = torch.clone(state_obs)
             critic_state_feature = self.critic_state_encoder(critic_state_obs)
-            critic_output_feature = torch.cat([image_feature, critic_state_feature], dim=-1)
+            critic_output_feature = torch.cat([critic_image_feature, critic_state_feature], dim=-1)
         else:
             critic_output_feature = None
         return output_feature, critic_output_feature, new_rnn_hxs
