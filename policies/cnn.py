@@ -183,7 +183,7 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         nn.init.orthogonal_(self.pi_mean_layers[-1].weight, gain=0.01)
         nn.init.constant_(self.pi_mean_layers[-1].bias, 0.)
     
-    def _forward_feature(self, obs, rnn_hxs: torch.Tensor, rnn_masks: torch.Tensor, previ_obs=None, forward_value=True):
+    def _forward_feature(self, obs, rnn_hxs: torch.Tensor, rnn_masks: torch.Tensor, previ_obs: torch.Tensor, forward_value: bool=True):
         assert obs.shape[-1] == torch.prod(torch.tensor(self.image_shape)) + self.state_dim
         image_obs = torch.narrow(obs, dim=1, start=0, length=torch.prod(torch.tensor(self.image_shape))).reshape((-1, *self.image_shape))
         state_obs = torch.narrow(obs, dim=1, start=torch.prod(torch.tensor(self.image_shape)), length=self.state_dim)
@@ -215,7 +215,8 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
             critic_output_feature = None
         return output_feature, critic_output_feature, new_rnn_hxs
 
-    def forward(self, obs, rnn_hxs: torch.Tensor, rnn_masks: torch.Tensor, previ_obs=None, forward_value=True):
+    @torch.jit.ignore
+    def forward(self, obs, rnn_hxs: torch.Tensor, rnn_masks: torch.Tensor, previ_obs: torch.Tensor=None, forward_value: bool=True):
         output_feature, critic_output_feature, rnn_hxs = self._forward_feature(obs, rnn_hxs, rnn_masks, previ_obs, forward_value)
         action_mean = self.pi_mean_layers(output_feature)
         action_dist = Normal(action_mean, torch.exp(self.pi_logstd))
@@ -241,7 +242,7 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         return log_probs, entropy, rnn_hxs
     
     def compute_aux_loss(self, obs, rnn_hxs, rnn_masks, aux_input):
-        output_feature, _, rnn_hxs = self._forward_feature(obs, rnn_hxs, rnn_masks, forward_value=False)
+        output_feature, _, rnn_hxs = self._forward_feature(obs, rnn_hxs, rnn_masks, None, forward_value=False)
         predict = self.aux_layer(output_feature)
         aux_ground_truth = torch.narrow(aux_input, dim=1, start=0, length=3)
         loss = self.aux_metric(predict, aux_ground_truth.detach())
@@ -253,6 +254,9 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
     
     @torch.jit.export
     def take_action(self, obs, rnn_hxs, rnn_masks):
-        _, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks, forward_value=False)
-        action = action_dist.mean
+        previ_obs = torch.tensor([0], device=obs.device)
+        output_feature, _, rnn_hxs = self._forward_feature(obs, rnn_hxs, rnn_masks, previ_obs, forward_value=False)
+        action = self.pi_mean_layers(output_feature)
+        # _, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks, previ_obs, forward_value=False)
+        # action = action_dist.mean
         return action, rnn_hxs

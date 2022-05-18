@@ -19,7 +19,7 @@ class PushConfig(BaseConfig):
         max_episode_length = 100
     
     class asset(BaseConfig.asset):
-        robot_urdf = "urdf/franka_description/robots/franka_panda.urdf"
+        robot_urdf = "urdf/franka_description/robots/franka_panda_cam.urdf"
     
     class obs(BaseConfig.obs):
         type = "pixel"
@@ -29,8 +29,8 @@ class PushConfig(BaseConfig):
         noise = True
     
     class cam(BaseConfig.cam):
-        # view = "ego"
-        view = "third"
+        view = "ego"
+        # view = "third"
         fov = 86
         w = 149
         h = 84
@@ -78,12 +78,13 @@ def contact_force_th_cl(_locals, _globals):
 config = dict(
     env_id="IsaacPandaPushCNN-v0",
     algo="ppo",
-    name="lstm_thirdcam_dagger_aux0.3_prvlg_sep_th30cl0.6_final5_pen-0.1",
+    name="lstm_oldcam_dagger_aux0.3_prvlg_sep_th30cl0.6_final5_pen-0.1",
     # name="1i1s_oldcam_bc30_statenoise_camurdf_contact-0.1",
     # name="test_joint_decimal6_1024w_step64_dense",
     total_timesteps=int(2e7),
     entry_point=PandaPushEnv,
     env_config=PushConfig(),
+    sim_device="cuda:0",
     # policy_type=("policies.cnn", "CNNStatePolicy"),
     # policy=dict(
     #     image_shape=(IMAGE_HISTORY_LENGTH, 3, 84, 84), 
