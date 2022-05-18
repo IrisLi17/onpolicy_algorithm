@@ -118,7 +118,7 @@ def evaluate(env, policy, n_episode):
                 obs_image.save(filename)
                 if hasattr(policy, "encode_obs"):
                     obs = policy.encode_obs(obs)
-            _, actions, _, recurrent_hidden_state = policy.act(obs, recurrent_hidden_state, recurrent_mask, deterministic=False)
+            _, actions, _, recurrent_hidden_state = policy.act(obs, recurrent_hidden_state, recurrent_mask, deterministic=False, forward_value=False)
         step_count += 1
         episode_length += 1
         obs, reward, done, info = env.step(actions)
