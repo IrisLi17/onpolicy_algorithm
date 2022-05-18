@@ -19,7 +19,7 @@ class PushConfig(BaseConfig):
         max_episode_length = 100
     
     class asset(BaseConfig.asset):
-        robot_urdf = "urdf/franka_description/robots/franka_panda_cam.urdf"
+        robot_urdf = "urdf/franka_description/robots/franka_panda.urdf"
     
     class obs(BaseConfig.obs):
         type = "pixel"
@@ -29,10 +29,13 @@ class PushConfig(BaseConfig):
         noise = True
     
     class cam(BaseConfig.cam):
-        view = "ego"
+        # view = "ego"
+        view = "third"
         fov = 86
         w = 149
         h = 84
+        # loc_r = [180, -45.0, 180.0]
+        # loc_p = [0.11104 - 0.0592106 - 0.01, -0.0156, 0.015]
     
     class control(BaseConfig.control):
         decimal = 6
@@ -43,11 +46,11 @@ class PushConfig(BaseConfig):
     
     class reward(BaseConfig.reward):
         type = "dense"
-        contact_coef = 0
+        contact_coef = -0.1
     
     class safety(BaseConfig.safety):
-        brake_on_contact = True
-        contact_force_th = 1.0
+        brake_on_contact = False
+        contact_force_th = 30.0
 
 
 def goal_in_air_cl(_locals, _globals):
@@ -61,13 +64,24 @@ def goal_in_air_cl(_locals, _globals):
         print("Goal in air ratio =", _locals["self"].env.goal_in_air)
 
 
+def contact_force_th_cl(_locals, _globals):
+    if _locals["j"] > 1:
+        import torch
+        ep_infos = _locals["ep_infos"]
+        success_rate = torch.mean(torch.tensor(ep_infos["is_success"]).float()).item()
+        cur_contact_force_th = _locals["self"].env.cfg.safety.contact_force_th
+        if success_rate > 0.6:
+            _locals["self"].env.set_contact_force_th(max(0.5 * cur_contact_force_th, 5.0))
+        print("Contact force threshold =", _locals["self"].env.cfg.safety.contact_force_th)
+
+
 config = dict(
     env_id="IsaacPandaPushCNN-v0",
     algo="ppo",
-    name="lstm_oldcam_dagger_tuning_statenoise_camurdf_terminate_contact0",
+    name="lstm_thirdcam_dagger_aux0.3_prvlg_sep_th30cl0.6_final5_pen-0.1",
     # name="1i1s_oldcam_bc30_statenoise_camurdf_contact-0.1",
     # name="test_joint_decimal6_1024w_step64_dense",
-    total_timesteps=int(1e7),
+    total_timesteps=int(2e7),
     entry_point=PandaPushEnv,
     env_config=PushConfig(),
     # policy_type=("policies.cnn", "CNNStatePolicy"),
@@ -85,6 +99,7 @@ config = dict(
         action_dim=4,
         hidden_size=64,
         lstm_hidden_size=64,
+        previ_dim=3,
     ),
     train=dict(
       n_steps=128,
@@ -94,7 +109,9 @@ config = dict(
       # cliprange=0.1,
       n_imitation_epoch=30,
       dagger=True,
+      aux_loss_coef=0.3,
+      previlege_critic=True,
       use_wandb=True
     ),
-    # callback=[goal_in_air_cl],
+    callback=[contact_force_th_cl],
 )
