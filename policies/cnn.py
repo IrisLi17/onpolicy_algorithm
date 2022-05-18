@@ -148,14 +148,14 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
             nn.Linear(hidden_size, hidden_size)
         )
         self.memory_cell = nn.LSTMCell(2 * hidden_size, lstm_hidden_size)
-        self.critic_memory_cell = nn.LSTMCell(2 * hidden_size, lstm_hidden_size)
+        # self.critic_memory_cell = nn.LSTMCell(2 * hidden_size, lstm_hidden_size)
         self.pi_mean_layers = nn.Sequential(
             nn.Linear(lstm_hidden_size, hidden_size), nn.ReLU(),
             nn.Linear(hidden_size, self.action_dim)
         )
         self.pi_logstd = nn.Parameter(torch.zeros(self.action_dim), requires_grad=True)
         self.vf_layers = nn.Sequential(
-            nn.Linear(lstm_hidden_size, hidden_size), nn.ReLU(),
+            nn.Linear(2 * hidden_size, hidden_size), nn.ReLU(),
             nn.Linear(hidden_size, 1)
         )
         self.aux_layer = nn.Sequential(
@@ -200,15 +200,7 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
             else:
                 critic_state_obs = torch.clone(state_obs)
             critic_state_feature = self.critic_state_encoder(critic_state_obs)
-            critic_input_feature = torch.cat([image_feature, critic_state_feature], dim=-1)
-            critic_input_feature = critic_input_feature.view(T, N, -1)
-            lstm_hxs = torch.narrow(rnn_hxs, dim=1, start=0, length=self.recurrent_hidden_state_size // 2)
-            lstm_cell = torch.narrow(rnn_hxs, dim=1, start=self.recurrent_hidden_state_size // 2, length=self.recurrent_hidden_state_size // 2)
-            critic_output_feature = []
-            for t in range(T):
-                lstm_hxs, lstm_cell = self.critic_memory_cell(critic_input_feature[t], (lstm_hxs * rnn_masks[t], lstm_cell))
-                critic_output_feature.append(lstm_hxs)
-            critic_output_feature = torch.stack(critic_output_feature, dim=0).reshape((T * N, -1))
+            critic_output_feature = torch.cat([image_feature, critic_state_feature], dim=-1)
         else:
             critic_output_feature = None
         return output_feature, critic_output_feature, new_rnn_hxs
