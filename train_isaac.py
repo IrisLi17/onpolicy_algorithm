@@ -35,13 +35,16 @@ def main():
     headless = True
     if args.play:
         # pass
-        config["env_config"].env.num_envs = 1
+        try:
+            config["env_config"].env.num_envs = 1
+        except:
+            pass
         config["train"] = {}
         # headless = False
     if isinstance(config["env_config"], dict):
         env = config["entry_point"](**config["env_config"])
     else:
-        env = config["entry_point"](config["env_config"], headless=headless)
+        env = config["entry_point"](config["env_config"], headless=headless, sim_device=config.get("sim_device", "cuda:0"))
     if config["policy_type"] == "mlp":
         from policies.mlp import MlpGaussianPolicy
         policy = MlpGaussianPolicy(env.num_obs, env.num_actions, **config["policy"])
@@ -110,7 +113,7 @@ def evaluate(env, policy, n_episode):
         filename = "tmp/tmp%d.png" % step_count
         image.save(filename)
         with torch.no_grad():
-            if env.cfg.obs.type == "pixel":
+            if hasattr(env.cfg, "obs") and env.cfg.obs.type == "pixel":
                 obs_image = obs[0, :3 * env.cfg.obs.im_size ** 2].reshape((3, env.cfg.obs.im_size, env.cfg.obs.im_size))
                 obs_image = (obs_image * env.im_std + env.im_mean).permute(1, 2, 0) * 255
                 obs_image = Image.fromarray(obs_image.cpu().numpy().astype(np.uint8))
