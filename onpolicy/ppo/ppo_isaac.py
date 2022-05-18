@@ -15,7 +15,8 @@ class PPO(object):
     def __init__(self, env, policy: nn.Module, device="cpu", n_steps=1024, nminibatches=32, noptepochs=10, gamma=0.99,
                  lam=0.95, learning_rate=2.5e-4, cliprange=0.2, ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, eps=1e-5,
                  use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False, feature_only=False, 
-                 n_imitation_epoch=30, dagger=False, expert_policy=None, aux_loss_coef=0.0, use_wandb=False):
+                 n_imitation_epoch=30, dagger=False, expert_policy=None, aux_loss_coef=0.0, previlege_critic=False,
+                 use_wandb=False):
         self.env = env
         self.policy = policy
         self.device = device
@@ -37,6 +38,7 @@ class PPO(object):
         self.use_dagger = dagger
         self.expert_policy = expert_policy
         self.aux_loss_coef = aux_loss_coef
+        self.previlege_critic = previlege_critic
         self.use_wandb = use_wandb
 
         self.n_envs = self.env.num_envs
@@ -89,7 +91,7 @@ class PPO(object):
                 with torch.no_grad():
                     value, action, action_log_prob, recurrent_hidden_states = self.policy.act(
                         self.rollouts.obs[step], self.rollouts.recurrent_hidden_states[step],
-                        self.rollouts.masks[step])
+                        self.rollouts.masks[step], previ_obs=state_obs[:, :3] if self.previlege_critic else None)
 
                 # Obser reward and next obs
                 step_start = time.time()
@@ -113,8 +115,9 @@ class PPO(object):
                 else:
                     store_obs = obs
                 with torch.no_grad():
+                    previlege_obs = self.env.get_state_obs()[:, :3] if self.previlege_critic else None
                     _next_value = self.policy.get_value(
-                        store_obs, recurrent_hidden_states, masks).detach()
+                        store_obs, recurrent_hidden_states, masks, previlege_obs).detach()
                     # If terminate due to time limit, mimic infinite horizon
                     reward += self.gamma * _next_value * info["time_out"].float().unsqueeze(dim=-1)
                 
@@ -123,9 +126,10 @@ class PPO(object):
                                      aux_info=state_obs)
 
             with torch.no_grad():
+                previlege_obs = self.env.get_state_obs()[:, :3] if self.previlege_critic else None
                 next_value = self.policy.get_value(
                     self.rollouts.obs[-1], self.rollouts.recurrent_hidden_states[-1],
-                    self.rollouts.masks[-1]).detach()
+                    self.rollouts.masks[-1], previlege_obs).detach()
 
             self.rollouts.compute_returns(next_value, self.use_gae, self.gamma, self.lam)
 
@@ -205,7 +209,8 @@ class PPO(object):
                 clipped_ratio = (torch.abs(ratio - 1) > self.cliprange).sum().item() / ratio.shape[0]
                 action_loss = -torch.min(surr1, surr2).mean()
 
-                values = self.policy.get_value(obs_batch, recurrent_hidden_states_batch, masks_batch)
+                values = self.policy.get_value(obs_batch, recurrent_hidden_states_batch, masks_batch, 
+                                               aux_batch[:, :3] if self.previlege_critic else None)
                 if self.use_clipped_value_loss:
                     value_pred_clipped = value_preds_batch + \
                                          (values - value_preds_batch).clamp(-self.cliprange, self.cliprange)
@@ -287,7 +292,8 @@ class PPO(object):
                         obs_batch, recurrent_hidden_states_batch, masks_batch, expert_obs_batch)
                 else:
                     aux_loss = torch.tensor(np.nan)
-                values = self.policy.get_value(obs_batch, recurrent_hidden_states_batch, masks_batch)
+                values = self.policy.get_value(obs_batch, recurrent_hidden_states_batch, masks_batch, 
+                                               expert_obs_batch[:, :3] if self.previlege_critic else None)
                 if self.use_clipped_value_loss:
                     value_pred_clipped = value_preds_batch + \
                                          (values - value_preds_batch).clamp(-self.cliprange, self.cliprange)
