@@ -43,7 +43,7 @@ class PPO(object):
 
         self.n_envs = self.env.num_envs
 
-        if self.use_dagger or self.aux_loss_coef > 0:
+        if self.previlege_critic:
             aux_shape = (self.env.num_state_obs,)
         else:
             aux_shape = None
@@ -87,7 +87,7 @@ class PPO(object):
                 update_linear_schedule(self.optimizer, j, num_updates, self.learning_rate)
 
             for step in range(self.n_steps):
-                if self.use_dagger or self.aux_loss_coef > 0:
+                if self.previlege_critic:
                     state_obs = self.env.get_state_obs()
                 else:
                     state_obs = None
@@ -371,7 +371,7 @@ class PPO(object):
         n_epoch = self.n_imitation_epoch
         batch_size = 64
         n_data = obs_buffer.shape[0]
-        assert action_buffer.shape[0] == n_data
+        assert actions_buffer.shape[0] == n_data
         inds = np.arange(n_data)
         if self.feature_only and not is_feature_input:
             with torch.no_grad():
@@ -383,7 +383,7 @@ class PPO(object):
                 obs_buffer = torch.cat(_obs_buffer, dim=0)
         else:
             obs_buffer = torch.from_numpy(obs_buffer).to(self.device)
-        action_buffer = torch.from_numpy(action_buffer).to(self.device)
+        action_buffer = torch.from_numpy(actions_buffer).to(self.device)
         losses = deque(maxlen=100)
         for e in range(n_epoch):
             np.random.shuffle(inds)
