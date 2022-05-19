@@ -6,7 +6,7 @@ from utils.distributions import Normal
 
 
 class CNNStatePolicy(ActorCriticPolicy):
-    def __init__(self, image_shape, state_dim, action_dim, hidden_size, previ_dim=0) -> None:
+    def __init__(self, image_shape, state_dim, action_dim, hidden_size, previ_dim=0, state_only_critic=False) -> None:
         super().__init__()
         if len(image_shape) == 4:
             pass
@@ -19,6 +19,7 @@ class CNNStatePolicy(ActorCriticPolicy):
         self.action_dim = action_dim
         self.hidden_size = hidden_size
         self.previ_dim = previ_dim
+        self.state_only_critic = state_only_critic
         
         self.image_encoder = nn.Sequential(
             nn.Conv2d(self.image_shape[1], 2 * self.image_shape[1], 8, 4, 0),
@@ -31,15 +32,16 @@ class CNNStatePolicy(ActorCriticPolicy):
         with torch.no_grad():
             image_feature_dim = self.image_encoder(torch.zeros(1, *self.image_shape[1:])).shape[-1]
         self.image_projector = nn.Linear(image_feature_dim * self.image_shape[0], hidden_size)
-        self.critic_image_encoder = nn.Sequential(
-            nn.Conv2d(self.image_shape[1], 2 * self.image_shape[1], 8, 4, 0),
-            nn.ReLU(),
-            nn.Conv2d(2 * self.image_shape[1], 4 * self.image_shape[1], 4, 2, 0),
-            nn.ReLU(),
-            nn.Conv2d(4 * self.image_shape[1], 4 * self.image_shape[1], 3, 1, 0),
-            nn.ReLU(), nn.Flatten(),
-        )
-        self.critic_image_projector = nn.Linear(image_feature_dim * self.image_shape[0], hidden_size)
+        if not self.state_only_critic:
+            self.critic_image_encoder = nn.Sequential(
+                nn.Conv2d(self.image_shape[1], 2 * self.image_shape[1], 8, 4, 0),
+                nn.ReLU(),
+                nn.Conv2d(2 * self.image_shape[1], 4 * self.image_shape[1], 4, 2, 0),
+                nn.ReLU(),
+                nn.Conv2d(4 * self.image_shape[1], 4 * self.image_shape[1], 3, 1, 0),
+                nn.ReLU(), nn.Flatten(),
+            )
+            self.critic_image_projector = nn.Linear(image_feature_dim * self.image_shape[0], hidden_size)
         
         self.pi_state_encoder = nn.Linear(self.state_dim, self.hidden_size)
         self.vf_state_encoder = nn.Linear(self.state_dim + self.previ_dim, self.hidden_size)
@@ -53,8 +55,9 @@ class CNNStatePolicy(ActorCriticPolicy):
             nn.Linear(hidden_size, self.action_dim)
         )
         self.pi_logstd = nn.Parameter(torch.zeros(self.action_dim), requires_grad=True)
+        vf_input_dim = hidden_size if self.state_only_critic else 2 * hidden_size
         self.vf_layers = nn.Sequential(
-            nn.Linear(hidden_size + hidden_size, hidden_size),
+            nn.Linear(vf_input_dim, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size), 
             nn.ReLU(),
@@ -85,14 +88,18 @@ class CNNStatePolicy(ActorCriticPolicy):
         action_mean = self.pi_mean_layers(pi_feature)
         dist = Normal(loc=action_mean, scale=torch.exp(self.pi_logstd))
         if forward_value:
-            critic_image_feature = self.critic_image_projector(self.critic_image_encoder(image_obs).reshape((batch_size, -1)))
+            if not self.state_only_critic:
+                critic_image_feature = self.critic_image_projector(self.critic_image_encoder(image_obs).reshape((batch_size, -1)))
             if self.previ_dim > 0:
                 assert previ_obs.shape[1] == self.previ_dim
                 critic_state_obs = torch.cat([state_obs, previ_obs], dim=-1)
             else:
                 critic_state_obs = torch.clone(state_obs)
-            vf_state_feature = self.vf_state_encoder(critic_state_obs) 
-            vf_feature = self.vf_layer_norm(torch.cat([critic_image_feature, vf_state_feature], dim=-1))
+            vf_state_feature = self.vf_state_encoder(critic_state_obs)
+            if not self.state_only_critic:
+                vf_feature = self.vf_layer_norm(torch.cat([critic_image_feature, vf_state_feature], dim=-1))
+            else:
+                vf_feature = vf_state_feature
             value = self.vf_layers(vf_feature)
         else:
             value = None
@@ -128,7 +135,7 @@ class CNNStatePolicy(ActorCriticPolicy):
 
 
 class CNNStateHistoryPolicy(ActorCriticPolicy):
-    def __init__(self, image_shape, state_dim, action_dim, hidden_size, lstm_hidden_size, previ_dim=0) -> None:
+    def __init__(self, image_shape, state_dim, action_dim, hidden_size, lstm_hidden_size, previ_dim=0, state_only_critic=False) -> None:
         super().__init__()
         assert len(image_shape) == 3
         assert image_shape[1] == image_shape[2]
@@ -137,6 +144,7 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         self.action_dim = action_dim
         self.hidden_size = hidden_size
         self.previ_dim = previ_dim
+        self.state_only_critic = state_only_critic
 
         # Recurrent perception part
         self.image_encoder = nn.Sequential(
@@ -150,15 +158,16 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         with torch.no_grad():
             image_feature_dim = self.image_encoder(torch.zeros(1, *self.image_shape)).shape[-1]
         self.image_projector = nn.Linear(image_feature_dim, hidden_size)
-        self.critic_image_encoder = nn.Sequential(
-            nn.Conv2d(self.image_shape[0], 2 * self.image_shape[0], 8, 4, 0),
-            nn.ReLU(),
-            nn.Conv2d(2 * self.image_shape[0], 4 * self.image_shape[0], 4, 2, 0),
-            nn.ReLU(),
-            nn.Conv2d(4 * self.image_shape[0], 4 * self.image_shape[0], 3, 1, 0),
-            nn.ReLU(), nn.Flatten(),
-        )
-        self.critic_image_projector = nn.Linear(image_feature_dim, hidden_size)
+        if not state_only_critic:
+            self.critic_image_encoder = nn.Sequential(
+                nn.Conv2d(self.image_shape[0], 2 * self.image_shape[0], 8, 4, 0),
+                nn.ReLU(),
+                nn.Conv2d(2 * self.image_shape[0], 4 * self.image_shape[0], 4, 2, 0),
+                nn.ReLU(),
+                nn.Conv2d(4 * self.image_shape[0], 4 * self.image_shape[0], 3, 1, 0),
+                nn.ReLU(), nn.Flatten(),
+            )
+            self.critic_image_projector = nn.Linear(image_feature_dim, hidden_size)
         self.state_encoder = nn.Sequential(
             nn.Linear(self.state_dim, hidden_size), nn.ReLU(),
             nn.Linear(hidden_size, hidden_size)
@@ -174,8 +183,9 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
             nn.Linear(hidden_size, self.action_dim)
         )
         self.pi_logstd = nn.Parameter(torch.zeros(self.action_dim), requires_grad=True)
+        vf_input_dim = hidden_size if self.state_only_critic else 2 * hidden_size
         self.vf_layers = nn.Sequential(
-            nn.Linear(2 * hidden_size, hidden_size), nn.ReLU(),
+            nn.Linear(vf_input_dim, hidden_size), nn.ReLU(),
             nn.Linear(hidden_size, 1)
         )
         self.aux_layer = nn.Sequential(
@@ -214,14 +224,18 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         output_feature = torch.stack(output_feature, dim=0).reshape((T * N, -1))
         new_rnn_hxs = torch.cat([lstm_hxs, lstm_cell], dim=-1)
         if forward_value:
-            critic_image_feature = self.critic_image_projector(self.critic_image_encoder(image_obs))
+            if not self.state_only_critic:
+                critic_image_feature = self.critic_image_projector(self.critic_image_encoder(image_obs))
             if self.previ_dim > 0:
                 assert previ_obs.shape[1] == self.previ_dim
                 critic_state_obs = torch.cat([state_obs, previ_obs], dim=-1)
             else:
                 critic_state_obs = torch.clone(state_obs)
             critic_state_feature = self.critic_state_encoder(critic_state_obs)
-            critic_output_feature = torch.cat([critic_image_feature, critic_state_feature], dim=-1)
+            if not self.state_only_critic:
+                critic_output_feature = torch.cat([critic_image_feature, critic_state_feature], dim=-1)
+            else:
+                critic_output_feature = critic_state_feature
         else:
             critic_output_feature = None
         return output_feature, critic_output_feature, new_rnn_hxs

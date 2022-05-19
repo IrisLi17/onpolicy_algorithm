@@ -92,6 +92,7 @@ config = dict(
         action_dim=4,
         hidden_size=64,
         previ_dim=3,
+        state_only_critic=False,
         # num_bin=21,
     ),
     # policy_type=("policies.cnn", "CNNStateHistoryPolicy"),
@@ -102,6 +103,7 @@ config = dict(
     #     hidden_size=64,
     #     lstm_hidden_size=64,
     #     previ_dim=3,
+    #     state_only_critic=True,
     # ),
     train=dict(
       n_steps=128,
