@@ -31,6 +31,16 @@ class CNNStatePolicy(ActorCriticPolicy):
         with torch.no_grad():
             image_feature_dim = self.image_encoder(torch.zeros(1, *self.image_shape[1:])).shape[-1]
         self.image_projector = nn.Linear(image_feature_dim * self.image_shape[0], hidden_size)
+        self.critic_image_encoder = nn.Sequential(
+            nn.Conv2d(self.image_shape[1], 2 * self.image_shape[1], 8, 4, 0),
+            nn.ReLU(),
+            nn.Conv2d(2 * self.image_shape[1], 4 * self.image_shape[1], 4, 2, 0),
+            nn.ReLU(),
+            nn.Conv2d(4 * self.image_shape[1], 4 * self.image_shape[1], 3, 1, 0),
+            nn.ReLU(), nn.Flatten(),
+        )
+        self.critic_image_projector = nn.Linear(image_feature_dim * self.image_shape[0], hidden_size)
+        
         self.pi_state_encoder = nn.Linear(self.state_dim, self.hidden_size)
         self.vf_state_encoder = nn.Linear(self.state_dim + self.previ_dim, self.hidden_size)
         self.pi_layer_norm = nn.LayerNorm(hidden_size + hidden_size)
@@ -75,13 +85,14 @@ class CNNStatePolicy(ActorCriticPolicy):
         action_mean = self.pi_mean_layers(pi_feature)
         dist = Normal(loc=action_mean, scale=torch.exp(self.pi_logstd))
         if forward_value:
+            critic_image_feature = self.critic_image_projector(self.critic_image_encoder(image_obs).reshape((batch_size, -1)))
             if self.previ_dim > 0:
                 assert previ_obs.shape[1] == self.previ_dim
                 critic_state_obs = torch.cat([state_obs, previ_obs], dim=-1)
             else:
                 critic_state_obs = torch.clone(state_obs)
             vf_state_feature = self.vf_state_encoder(critic_state_obs) 
-            vf_feature = self.vf_layer_norm(torch.cat([image_feature, vf_state_feature], dim=-1))
+            vf_feature = self.vf_layer_norm(torch.cat([critic_image_feature, vf_state_feature], dim=-1))
             value = self.vf_layers(vf_feature)
         else:
             value = None

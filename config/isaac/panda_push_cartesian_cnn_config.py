@@ -91,6 +91,7 @@ config = dict(
         state_dim=15 * STATE_HISTORY_LENGTH, 
         action_dim=4,
         hidden_size=64,
+        previ_dim=3,
         # num_bin=21,
     ),
     # policy_type=("policies.cnn", "CNNStateHistoryPolicy"),
