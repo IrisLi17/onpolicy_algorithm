@@ -19,14 +19,14 @@ class ActorCriticPolicy(nn.Module):
     # def recurrent_hidden_state_size(self, value):
     #     self._recurrent_hidden_state_size = value
 
-    def forward(self, obs, rnn_hxs=None, rnn_masks=None):
+    def forward(self, obs, rnn_hxs=None, rnn_masks=None, previ_obs=None):
         raise NotImplementedError
     
-    def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False):
+    def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False, previ_obs=None, forward_value=True):
         raise NotImplementedError
 
-    def get_value(self, obs, rnn_hxs=None, rnn_masks=None):
-        value, dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks)
+    def get_value(self, obs, rnn_hxs=None, rnn_masks=None, previ_obs=None):
+        value, dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks, previ_obs)
         return value
 
     def evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions):

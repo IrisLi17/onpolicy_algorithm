@@ -102,20 +102,30 @@ class MlpPolicy(ActorCriticPolicy):
 
 
 class MlpGaussianPolicy(ActorCriticPolicy):
-    def __init__(self, obs_dim, act_dim, hidden_size):
+    def __init__(self, obs_dim, act_dim, hidden_size, n_layers=2):
         super(MlpGaussianPolicy, self).__init__()
         self.obs_dim = obs_dim
         self.act_dim = act_dim
-        self.policy_feature = nn.Sequential(
-            nn.Linear(self.obs_dim, hidden_size), nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size), nn.ReLU(),
-        )
+        # self.policy_feature = nn.Sequential(
+        #     nn.Linear(self.obs_dim, hidden_size), nn.ReLU(),
+        #     nn.Linear(hidden_size, hidden_size), nn.ReLU(),
+        # )
+        self.policy_feature = [nn.Linear(self.obs_dim, hidden_size), nn.ReLU()]
+        for _ in range(n_layers - 1):
+            self.policy_feature.append(nn.Linear(hidden_size, hidden_size))
+            self.policy_feature.append(nn.ReLU())
+        self.policy_feature = nn.Sequential(*self.policy_feature)
         self.actor_mean = nn.Linear(hidden_size, self.act_dim)
         self.actor_logstd = nn.Parameter(torch.zeros(self.act_dim), requires_grad=True)
-        self.value_feature = nn.Sequential(
-            nn.Linear(self.obs_dim, hidden_size), nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size), nn.ReLU(),
-        )
+        # self.value_feature = nn.Sequential(
+        #     nn.Linear(self.obs_dim, hidden_size), nn.ReLU(),
+        #     nn.Linear(hidden_size, hidden_size), nn.ReLU(),
+        # )
+        self.value_feature = [nn.Linear(self.obs_dim, hidden_size), nn.ReLU()]
+        for _ in range(n_layers - 1):
+            self.value_feature.append(nn.Linear(hidden_size, hidden_size))
+            self.value_feature.append(nn.ReLU())
+        self.value_feature = nn.Sequential(*self.value_feature)
         self.value_head = nn.Linear(hidden_size, 1)
         self.is_recurrent = False
         self.recurrent_hidden_state_size = 1
@@ -128,7 +138,7 @@ class MlpGaussianPolicy(ActorCriticPolicy):
         nn.init.constant_(self.actor_mean.bias, 0.)
 
     @torch.jit.ignore
-    def forward(self, obs, rnn_hxs=None, rnn_masks=None):
+    def forward(self, obs, rnn_hxs=None, rnn_masks=None, previ_obs=None):
         policy_features = self.policy_feature(obs)
         policy_mean = self.actor_mean(policy_features)
         # policy_logstd = torch.clamp(self.actor_logstd, -5, 0)
@@ -146,7 +156,7 @@ class MlpGaussianPolicy(ActorCriticPolicy):
         return values, action_dist, rnn_hxs
 
     @torch.jit.ignore
-    def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False):
+    def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False, previ_obs=None, forward_value=True):
         values, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks)
         if deterministic:
             actions = action_dist.loc
@@ -171,31 +181,66 @@ class MlpGaussianPolicy(ActorCriticPolicy):
         return policy_mean
 
 
-class MlpDynamics(nn.Module):
-    def __init__(self, obs_dim, act_dim, hidden_size):
-        super(MlpDynamics, self).__init__()
+class PandaHybridPolicy(ActorCriticPolicy):
+    def __init__(self, obs_dim, hidden_size):
+        super(PandaHybridPolicy, self).__init__()
         self.obs_dim = obs_dim
-        self.act_dim = act_dim
-        self.state_feature = nn.Sequential(
-            nn.Linear(self.obs_dim, hidden_size), nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size), nn.ReLU(),
+        self.policy_feature = nn.Sequential(
+            nn.Linear(obs_dim, hidden_size), nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size), nn.ReLU()
         )
-        self.sa_feature = nn.Sequential(
-            nn.Linear(self.obs_dim + self.act_dim, hidden_size), nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size), nn.ReLU(),
+        self.action_type_predictor = nn.Linear(hidden_size, 2)
+        self.action_mean = nn.Linear(hidden_size, 4)
+        self.action_logstd = nn.Parameter(torch.zeros(4), requires_grad=True)
+        self.value_feature = nn.Sequential(
+            nn.Linear(obs_dim, hidden_size), nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size), nn.ReLU()
         )
-        self.value_head = nn.Sequential(nn.Linear(hidden_size, 1), nn.Sigmoid())
-
-    def forward(self, obs, actions, rnn_hxs=None, rnn_masks=None):
-        next_features = self.sa_feature.forward(torch.cat([obs, actions], dim=-1))
-        values = self.value_head.forward(next_features)
-        return values, next_features
-
-    def get_state_feature(self, obs, rnn_hxs=None, rnn_masks=None):
-        state_features = self.state_feature.forward(obs)
-        return state_features
-
-    def predict_without_action(self, obs, rnn_hxs=None, rnn_masks=None):
-        state_feature = self.get_state_feature(obs, rnn_hxs, rnn_masks)
-        values = self.value_head.forward(state_feature)
-        return values
+        self.value_head = nn.Linear(hidden_size, 1)
+        self.is_recurrent = False
+        self.recurrent_hidden_state_size = 1
+        self._initialize()
+    
+    def _initialize(self):
+        nn.init.orthogonal_(self.value_head.weight, gain=np.sqrt(2))
+        nn.init.constant_(self.value_head.bias, 0.)
+        nn.init.orthogonal_(self.action_mean.weight, gain=0.01)
+        nn.init.constant_(self.action_mean.bias, 0.)
+    
+    def forward(self, obs, rnn_hxs=None, rnn_masks=None):
+        policy_feature = self.policy_feature(obs)
+        action_type = torch.softmax(self.action_type_predictor(policy_feature),dim=-1)
+        action_mean = self.action_mean(policy_feature)
+        action_type_dist = Categorical(probs=action_type)
+        pos_action_dist = Normal(action_mean[:, :3], torch.exp(self.action_logstd[:3]))
+        gripper_action_dist = Normal(action_mean[:, 3:], torch.exp(self.action_logstd[3:]))
+        value_features = self.value_feature(obs)
+        values = self.value_head(value_features)
+        return values, (action_type_dist, pos_action_dist, gripper_action_dist),rnn_hxs
+    
+    def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False):
+        values, (action_type_dist, pos_action_dist, gripper_action_dist), rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks)
+        if deterministic:
+            action_type = torch.argmax(action_type_dist.probs, dim=1, keepdim=True)
+            pos_actions = pos_action_dist.mean
+            gripper_actions = gripper_action_dist.mean
+        else:
+            action_type = action_type_dist.sample().unsqueeze(dim=-1)
+            pos_actions = pos_action_dist.sample()
+            gripper_actions = gripper_action_dist.sample()
+        actions = torch.cat([action_type, pos_actions, gripper_actions], dim=-1)
+        log_prob = action_type_dist.log_prob(action_type.squeeze(dim=-1)).unsqueeze(dim=-1) \
+                   + pos_action_dist.log_prob(pos_actions).sum(dim=-1, keepdim=True) \
+                   + gripper_action_dist.log_prob(gripper_actions).sum(dim=-1, keepdim=True)
+        return values, actions, log_prob, rnn_hxs
+    
+    def evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions):
+        values, (action_type_dist, pos_action_dist, gripper_action_dist), rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks)
+        action_type = torch.narrow(actions, dim=1, start=0, length=1)
+        pos_actions = torch.narrow(actions, dim=1, start=1, length=3)
+        gripper_actions = torch.narrow(actions, dim=1, start=4, length=1)
+        log_prob = action_type_dist.log_prob(action_type.squeeze(dim=-1)).unsqueeze(dim=-1) \
+                   + pos_action_dist.log_prob(pos_actions).sum(dim=-1, keepdim=True) \
+                   + gripper_action_dist.log_prob(gripper_actions).sum(dim=-1, keepdim=True)
+        entropy = (action_type_dist.entropy() + pos_action_dist.entropy().sum(dim=-1) + gripper_action_dist.entropy().sum(dim=-1)) / 5
+        return log_prob, entropy, rnn_hxs

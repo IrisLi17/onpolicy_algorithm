@@ -87,8 +87,8 @@ class CNNStatePolicy(ActorCriticPolicy):
             value = None
         return value, dist, rnn_hxs
     
-    def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False, previ_obs=None):
-        value, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks, previ_obs)
+    def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False, previ_obs=None, forward_value=True):
+        value, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks, previ_obs, forward_value)
         if deterministic:
             action = action_dist.mean
         else:

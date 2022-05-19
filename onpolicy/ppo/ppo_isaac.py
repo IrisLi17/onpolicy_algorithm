@@ -43,11 +43,15 @@ class PPO(object):
 
         self.n_envs = self.env.num_envs
 
+        if self.use_dagger or self.aux_loss_coef > 0:
+            aux_shape = (self.env.num_state_obs,)
+        else:
+            aux_shape = None
         self.rollouts = RolloutStorage(self.n_steps, self.n_envs,
                                        (self.env.num_obs,) if not self.feature_only else (self.policy.obs_feature_size,),
                                        self.env.num_actions,
                                        self.policy.recurrent_hidden_state_size,
-                                       aux_shape=(self.env.num_state_obs,))
+                                       aux_shape=aux_shape)
 
         self.optimizer = optim.Adam(policy.parameters(), lr=learning_rate, eps=eps)
 
@@ -83,7 +87,7 @@ class PPO(object):
                 update_linear_schedule(self.optimizer, j, num_updates, self.learning_rate)
 
             for step in range(self.n_steps):
-                if True:
+                if self.use_dagger or self.aux_loss_coef > 0:
                     state_obs = self.env.get_state_obs()
                 else:
                     state_obs = None
@@ -186,7 +190,11 @@ class PPO(object):
             for mb_idx, sample in enumerate(data_generator):
                 obs_batch, recurrent_hidden_states_batch, actions_batch, \
                 value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, \
-                adv_targ, aux_batch, *_ = sample
+                adv_targ, *_ = sample
+                if len(_):
+                    aux_batch = _[0]
+                else:
+                    aux_batch = None
                 # todo: bug with recurrent generator
                 # print("hxs shape", recurrent_hidden_states_batch.shape, "mask shape", masks_batch.shape)  # (2, 128), (8192, 1)
                 # Reshape to do in a single forward pass for all steps
