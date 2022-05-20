@@ -63,6 +63,10 @@ class CNNStatePolicy(ActorCriticPolicy):
             nn.ReLU(),
             nn.Linear(hidden_size, 1)
         )
+        self.aux_layer = nn.Sequential(
+            nn.Linear(2 * hidden_size, 3)
+        )
+        self.aux_metric = nn.L1Loss()
         self.is_recurrent = False
         self.recurrent_hidden_state_size = 1
         self._initialize()
@@ -120,6 +124,19 @@ class CNNStatePolicy(ActorCriticPolicy):
         entropy = action_dist.entropy()
         return log_probs, entropy, rnn_hxs
     
+    def compute_aux_loss(self, obs, rnn_hxs=None, rnn_masks=None, aux_input=None):
+        batch_size = obs.shape[0]
+        image_obs = torch.narrow(obs, dim=1, start=0, length=torch.prod(torch.tensor(self.image_shape)))
+        image_obs = image_obs.reshape((-1, *self.image_shape[1:]))  # (batch_size * L, C, H, W)
+        state_obs = torch.narrow(obs, dim=1, start=torch.prod(torch.tensor(self.image_shape)), length=self.state_dim)
+        image_feature = self.image_projector(self.image_encoder(image_obs).reshape((batch_size, -1)))
+        pi_state_feature = self.pi_state_encoder(state_obs)
+        pi_feature = self.pi_layer_norm(torch.cat([image_feature, pi_state_feature], dim=-1))
+        predict = self.aux_layer(pi_feature)
+        aux_ground_truth = torch.narrow(aux_input, dim=1, start=0, length=3)
+        loss = self.aux_metric(predict, aux_ground_truth.detach())
+        return loss
+
     @torch.jit.export
     def take_action(self, obs):
         assert obs.shape[-1] == torch.prod(torch.tensor(self.image_shape)) + self.state_dim
@@ -189,7 +206,7 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
             nn.Linear(hidden_size, 1)
         )
         self.aux_layer = nn.Sequential(
-            nn.Linear(lstm_hidden_size, hidden_size), nn.ReLU(), nn.Linear(hidden_size, 3)
+            nn.Linear(lstm_hidden_size, 3)
         )
         self.aux_metric = nn.L1Loss()
         self.is_recurrent = True
@@ -205,6 +222,14 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         nn.init.constant_(self.pi_mean_layers[-1].bias, 0.)
     
     def _forward_feature(self, obs, rnn_hxs: torch.Tensor, rnn_masks: torch.Tensor, previ_obs: torch.Tensor, forward_value: bool=True):
+        output_feature, new_rnn_hxs = self._forward_policy_feature(obs, rnn_hxs, rnn_masks)
+        if forward_value:
+            critic_output_feature = self._forward_critic_feature(obs, previ_obs)
+        else:
+            critic_output_feature = None
+        return output_feature, critic_output_feature, new_rnn_hxs
+
+    def _forward_policy_feature(self, obs: torch.Tensor, rnn_hxs: torch.Tensor, rnn_masks: torch.Tensor):
         assert obs.shape[-1] == torch.prod(torch.tensor(self.image_shape)) + self.state_dim
         image_obs = torch.narrow(obs, dim=1, start=0, length=torch.prod(torch.tensor(self.image_shape))).reshape((-1, *self.image_shape))
         state_obs = torch.narrow(obs, dim=1, start=torch.prod(torch.tensor(self.image_shape)), length=self.state_dim)
@@ -223,22 +248,25 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
             output_feature.append(lstm_hxs)
         output_feature = torch.stack(output_feature, dim=0).reshape((T * N, -1))
         new_rnn_hxs = torch.cat([lstm_hxs, lstm_cell], dim=-1)
-        if forward_value:
-            if not self.state_only_critic:
-                critic_image_feature = self.critic_image_projector(self.critic_image_encoder(image_obs))
-            if self.previ_dim > 0:
-                assert previ_obs.shape[1] == self.previ_dim
-                critic_state_obs = torch.cat([state_obs, previ_obs], dim=-1)
-            else:
-                critic_state_obs = torch.clone(state_obs)
-            critic_state_feature = self.critic_state_encoder(critic_state_obs)
-            if not self.state_only_critic:
-                critic_output_feature = torch.cat([critic_image_feature, critic_state_feature], dim=-1)
-            else:
-                critic_output_feature = critic_state_feature
+        return output_feature, new_rnn_hxs
+
+    def _forward_critic_feature(self, obs: torch.Tensor, previ_obs: torch.Tensor):
+        assert obs.shape[-1] == torch.prod(torch.tensor(self.image_shape)) + self.state_dim
+        image_obs = torch.narrow(obs, dim=1, start=0, length=torch.prod(torch.tensor(self.image_shape))).reshape((-1, *self.image_shape))
+        state_obs = torch.narrow(obs, dim=1, start=torch.prod(torch.tensor(self.image_shape)), length=self.state_dim)
+        if not self.state_only_critic:
+            critic_image_feature = self.critic_image_projector(self.critic_image_encoder(image_obs))
+        if self.previ_dim > 0:
+            assert previ_obs.shape[1] == self.previ_dim
+            critic_state_obs = torch.cat([state_obs, previ_obs], dim=-1)
         else:
-            critic_output_feature = None
-        return output_feature, critic_output_feature, new_rnn_hxs
+            critic_state_obs = torch.clone(state_obs)
+        critic_state_feature = self.critic_state_encoder(critic_state_obs)
+        if not self.state_only_critic:
+            critic_output_feature = torch.cat([critic_image_feature, critic_state_feature], dim=-1)
+        else:
+            critic_output_feature = critic_state_feature
+        return critic_output_feature
 
     @torch.jit.ignore
     def forward(self, obs, rnn_hxs: torch.Tensor, rnn_masks: torch.Tensor, previ_obs: torch.Tensor=None, forward_value: bool=True):
@@ -279,8 +307,7 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
     
     @torch.jit.export
     def take_action(self, obs, rnn_hxs, rnn_masks):
-        previ_obs = torch.tensor([0], device=obs.device)
-        output_feature, _, rnn_hxs = self._forward_feature(obs, rnn_hxs, rnn_masks, previ_obs, forward_value=False)
+        output_feature, rnn_hxs = self._forward_policy_feature(obs, rnn_hxs, rnn_masks)
         action = self.pi_mean_layers(output_feature)
         # _, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks, previ_obs, forward_value=False)
         # action = action_dist.mean

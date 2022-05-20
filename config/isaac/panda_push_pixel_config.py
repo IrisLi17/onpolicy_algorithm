@@ -8,7 +8,7 @@ sys.path.remove("../isaac_projects/panda-isaac")
 class PushConfig(BaseConfig):
     class env(BaseConfig.env):
         seed = 42
-        num_envs = 225
+        num_envs = 16
         num_observations = 3 * 224 * 224 + 30
         # num_observations = 7 + 27
         num_actions = 8
@@ -18,6 +18,10 @@ class PushConfig(BaseConfig):
         type = "pixel"
         im_size = 224
     
+    class cam(BaseConfig.cam):
+        view = "ego"
+        fov = 120
+    
     class control(BaseConfig.control):
         decimal = 6
         controller = "joint"
@@ -25,13 +29,13 @@ class PushConfig(BaseConfig):
         # common_speed = 1.5 * decimal
     
     class reward(BaseConfig.reward):
-        type = "sparse"
+        type = "dense"
 
 
 config = dict(
     env_id="IsaacPandaPushPixel-v0",
     algo="ppo",
-    name="test",
+    name="test_ego_dense_clip0.2_mini8_lr2.5e-4",
     total_timesteps=int(1e9),
     entry_point=PandaPushEnv,
     env_config=PushConfig(),
@@ -46,17 +50,20 @@ config = dict(
             pretrain_dir="policies/mvp/pretrained",
             pretrain_type="hoi",
             freeze=True,
-            emb_dim=128),
-        policy_cfg=dict(pi_hid_sizes=[256, 128, 64], vf_hid_sizes=[256, 128, 64])
+            emb_dim=8,
+            state_emb_dim=64),
+        policy_cfg=dict(pi_hid_sizes=[64, 64], vf_hid_sizes=[64, 64])
     ),
     train=dict(
       feature_only=True,
       # n_steps=1024,
-      n_steps=64,
+      n_steps=32,
       nminibatches=8,
       # learning_rate=1e-3,
       learning_rate=2.5e-4,
-      # cliprange=0.1,
+      cliprange=0.2,
+      ent_coef=0.0,
+      max_grad_norm=1.0,
       use_wandb=False
     ),
 )
