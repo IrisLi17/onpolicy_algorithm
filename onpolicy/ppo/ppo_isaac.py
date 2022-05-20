@@ -356,13 +356,14 @@ class PPO(object):
         assert not self.policy.is_recurrent
         import pickle
         import numpy as np
-        obs_buffer, actions_buffer = [], []
+        obs_buffer, actions_buffer, state_obs_buffer = [], [], []
         with open(dataset_path, "rb") as f:
             try:
                 while True:
                     traj = pickle.load(f)
                     obs_buffer.append(traj["image_obs"])
                     actions_buffer.append(traj["action"])
+                    state_obs_buffer.append(traj["state_obs"])
             except EOFError:
                 pass
         obs_buffer = np.concatenate(obs_buffer, axis=0)
@@ -384,6 +385,7 @@ class PPO(object):
         else:
             obs_buffer = torch.from_numpy(obs_buffer).to(self.device)
         action_buffer = torch.from_numpy(actions_buffer).to(self.device)
+        state_obs_buffer = torch.from_numpy(state_obs_buffer).to(self.device)
         losses = deque(maxlen=100)
         for e in range(n_epoch):
             np.random.shuffle(inds)
@@ -391,10 +393,12 @@ class PPO(object):
                 mb_ids = inds[m * batch_size: (m + 1) * batch_size]
                 obs_batch = obs_buffer[mb_ids]
                 actions_batch = action_buffer[mb_ids]
+                state_obs_batch = state_obs_batch[mb_ids]
                 action_log_probs, dist_entropy, _ = self.policy.evaluate_actions(
                     obs_batch, None, None,
                     actions_batch)
-                loss = -action_log_probs.mean()
+                aux_loss = self.policy.compute_aux_loss(obs_batch, None, None, state_obs_batch)
+                loss = -action_log_probs.mean() + self.aux_loss_coef * aux_loss.mean()
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -405,13 +409,14 @@ class PPO(object):
         assert self.policy.is_recurrent
         import pickle
         optimizer = optim.Adam(self.policy.parameters(), lr=2.5e-4)
-        obs_list, actions_list = [], []
+        obs_list, actions_list, state_obs_list = [], [], []
         with open(dataset_path, "rb") as f:
             try:
                 while True:
                     traj = pickle.load(f)
                     obs_list.append(torch.from_numpy(traj["image_obs"]).to(self.device))
                     actions_list.append(torch.from_numpy(traj["action"]).to(self.device))
+                    state_obs_list.append(torch.from_numpy(traj["state_obs"]).to(self.device))
             except EOFError:
                 pass
         losses = deque(maxlen=100)
@@ -422,7 +427,10 @@ class PPO(object):
                 action_log_probs, _, _ = self.policy.evaluate_actions(
                     obs_list[b_idx], recurrent_hidden_state, recurrent_mask, actions_list[b_idx]
                 )
-                loss = -action_log_probs.mean()
+                aux_loss = self.policy.compute_aux_loss(
+                    obs_list[b_idx], recurrent_hidden_state, recurrent_mask, state_obs_list[b_idx]
+                )
+                loss = -action_log_probs.mean() + self.aux_loss_coef * aux_loss.mean()
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
