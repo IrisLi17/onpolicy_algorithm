@@ -8,7 +8,7 @@ cfg_module = importlib.import_module(args.config)
 config = cfg_module.config
 import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-observation_shape = 20
+observation_shape = 18
 action_shape = 4
 if config["policy_type"] == "mlp":
     from policies.mlp import MlpGaussianPolicy

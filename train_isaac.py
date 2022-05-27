@@ -73,7 +73,7 @@ def main():
         raise NotImplementedError
 
     def callback(locals, globals):
-        if locals["j"] % 20 == 0:
+        if locals["j"] % 50 == 0:
             model.save(os.path.join(config["log_dir"], "model_%d.pt" % locals["j"]))
 
     logger.log(config)
@@ -104,6 +104,7 @@ def evaluate(env, policy, n_episode):
         shutil.rmtree("tmp")
     os.makedirs("tmp", exist_ok=True)
     obs = env.reset()
+    print(obs[0])
     recurrent_hidden_state = torch.zeros(env.num_envs, policy.recurrent_hidden_state_size, dtype=torch.float, device=env.device)
     recurrent_mask = torch.ones(1, 1, dtype=torch.float, device=env.device)
     while episode_count < n_episode:
@@ -124,11 +125,14 @@ def evaluate(env, policy, n_episode):
             _, actions, _, recurrent_hidden_state = policy.act(obs, recurrent_hidden_state, recurrent_mask, deterministic=False, forward_value=False)
         step_count += 1
         episode_length += 1
+        # print(step_count, obs[0])
+        if actions[0][-1].abs() > 0.5:
+            print(step_count, actions[0])
         obs, reward, done, info = env.step(actions)
         recurrent_mask = (1 - done.float()).reshape((env.num_envs, 1))
         if done[0]:
-            print(obs[0])
             print("episode length", episode_length, info)
+            print(obs[0])
             episode_count += 1
             episode_length = 0
 

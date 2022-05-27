@@ -36,6 +36,9 @@ class PushConfig(BaseConfig):
     class safety(BaseConfig.safety):
         brake_on_contact = False
         contact_force_th = 30.0
+    
+    class domain_randomization(BaseConfig.domain_randomization):
+        friction_range = [1.0, 2.5]
 
 
 def goal_in_air_cl(_locals, _globals):
@@ -63,24 +66,25 @@ def contact_force_th_cl(_locals, _globals):
 config = dict(
     env_id="IsaacPandaPushState-v0",
     algo="ppo",
-    name="clipfinger_cfth30cl0.6_force2_pen-0.1",
+    name="rand_table_height_sepfinger_fixori_fric1-2.5",
     # name="test_joint_decimal6_1024w_step64_dense",
-    total_timesteps=int(1e8),
+    total_timesteps=int(3e8),
     entry_point=PandaPushEnv,
     env_config=PushConfig(),
     policy_type="mlp",
     policy=dict(
-        hidden_size=64,
+        hidden_size=128,
+        n_layers=3,
         # num_bin=21,
     ),
     train=dict(
       # n_steps=1024,
-      n_steps=64,
+      n_steps=128,
       nminibatches=32,
       # learning_rate=1e-3,
       learning_rate=2.5e-4,
       # cliprange=0.1,
-      use_wandb=True
+      use_wandb=False
     ),
     callback=[contact_force_th_cl],
 )
