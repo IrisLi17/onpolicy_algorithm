@@ -181,6 +181,74 @@ class MlpGaussianPolicy(ActorCriticPolicy):
         return policy_mean
 
 
+class PandaSepPolicy(ActorCriticPolicy):
+    def __init__(self, obs_dim, hidden_size, n_layers=2) -> None:
+        super(PandaSepPolicy, self).__init__()
+        self.obs_dim = obs_dim
+        self.hidden_size = hidden_size
+        self.policy_feature = [nn.Linear(self.obs_dim, hidden_size), nn.ReLU()]
+        for _ in range(n_layers - 1):
+            self.policy_feature.append(nn.Linear(hidden_size, hidden_size))
+            self.policy_feature.append(nn.ReLU())
+        self.policy_feature = nn.Sequential(*self.policy_feature)
+        self.arm_action_mean = nn.Linear(hidden_size, 3)
+        self.arm_action_logstd = nn.Parameter(torch.zeros(3), requires_grad=True)
+        self.gripper_action = nn.Linear(hidden_size, 3)
+        self.value_feature = [nn.Linear(self.obs_dim, hidden_size), nn.ReLU()]
+        for _ in range(n_layers - 1):
+            self.value_feature.append(nn.Linear(hidden_size, hidden_size))
+            self.value_feature.append(nn.ReLU())
+        self.value_feature = nn.Sequential(*self.value_feature)
+        self.value_head = nn.Linear(hidden_size, 1)
+        self.is_recurrent = False
+        self.recurrent_hidden_state_size = 1
+        self._initialize()
+
+    def _initialize(self):
+        nn.init.orthogonal_(self.value_head.weight, gain=np.sqrt(2))
+        nn.init.constant_(self.value_head.bias, 0.)
+        nn.init.orthogonal_(self.arm_action_mean.weight, gain=0.01)
+        nn.init.constant_(self.arm_action_mean.bias, 0.)
+    
+    def forward(self, obs, rnn_hxs=None, rnn_masks=None, previ_obs=None):
+        policy_features = self.policy_feature(obs)
+        arm_action_mean = self.arm_action_mean(policy_features)
+        gripper_action_logit = self.gripper_action(policy_features)
+        value_features = self.value_feature(obs)
+        values = self.value_head(value_features)
+        action_dist = (Normal(arm_action_mean, torch.exp(self.arm_action_logstd)), Categorical(logits=gripper_action_logit))
+        return values, action_dist, rnn_hxs
+    
+    def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False, previ_obs=None, forward_value=True):
+        values, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks, previ_obs)
+        if deterministic:
+            arm_action = action_dist[0].loc
+            gripper_action = torch.argmax(action_dist[1].probs, dim=-1, keepdim=True)
+        else:
+            arm_action = action_dist[0].sample()
+            gripper_action = action_dist[1].sample().unsqueeze(dim=-1)
+        normed_gripper_action = gripper_action / 2.0 * 2 - 1
+        actions = torch.cat([arm_action, normed_gripper_action], dim=-1)
+        log_prob = action_dist[0].log_prob(arm_action).sum(dim=-1, keepdim=True) + action_dist[1].log_prob(gripper_action.squeeze(dim=-1)).unsqueeze(dim=-1)
+        return values, actions, log_prob, rnn_hxs
+    
+    def evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions):
+        _, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks)
+        arm_action = torch.narrow(actions, dim=1, start=0, length=3)
+        gripper_action = ((torch.narrow(actions, dim=1, start=3, length=1) + 1) / 2 * 2).to(torch.int)
+        log_prob = action_dist[0].log_prob(arm_action).sum(dim=-1, keepdim=True) + action_dist[1].log_prob(gripper_action.squeeze(dim=-1)).unsqueeze(dim=-1)
+        entropy = (action_dist[0].entropy().sum(dim=-1) + action_dist[1].entropy()) / 4
+        return log_prob, entropy, rnn_hxs
+    
+    def take_action(self, obs):
+        policy_features = self.policy_feature(obs)
+        arm_action_mean = self.arm_action_mean(policy_features)
+        gripper_action_logit = self.gripper_action(policy_features)
+        gripper_action = torch.argmax(gripper_action_logit, dim=1, keepdim=True) / 2.0 * 2 - 1
+        action = torch.clamp(torch.cat([arm_action_mean, gripper_action], dim=-1), min=-1, max=1)
+        return action
+
+
 class PandaHybridPolicy(ActorCriticPolicy):
     def __init__(self, obs_dim, hidden_size):
         super(PandaHybridPolicy, self).__init__()
