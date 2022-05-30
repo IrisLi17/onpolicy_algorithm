@@ -12,7 +12,7 @@ IMAGE_HISTORY_LENGTH = 1
 class PushConfig(BaseConfig):
     class env(BaseConfig.env):
         seed = 42
-        num_envs = 256
+        num_envs = 512
         num_observations = IMAGE_HISTORY_LENGTH * 3 * 84 * 84 + STATE_HISTORY_LENGTH * 15
         num_actions = 4
         num_state_obs = 18 * STATE_HISTORY_LENGTH
@@ -31,7 +31,7 @@ class PushConfig(BaseConfig):
     class cam(BaseConfig.cam):
         view = "ego"
         # view = "third"
-        fov = 86
+        fov = 88
         w = 149
         h = 84
         # loc_r = [180, -45.0, 180.0]
@@ -78,7 +78,7 @@ def contact_force_th_cl(_locals, _globals):
 config = dict(
     env_id="IsaacPandaPushCNN-v0",
     algo="ppo",
-    name="1i1s_oldcam_dagger_prvlg_sep_th30cl0.6_final5_pen-0.1",
+    name="1i1s_oldcam_bcexpert30_prvlg",
     # name="1i1s_oldcam_bc30_statenoise_camurdf_contact-0.1",
     # name="test_joint_decimal6_1024w_step64_dense",
     total_timesteps=int(2e7),
@@ -112,10 +112,10 @@ config = dict(
       learning_rate=1.5e-4,
       # cliprange=0.1,
       n_imitation_epoch=30,
-      dagger=True,
+      dagger=False,
       aux_loss_coef=0.0,
       previlege_critic=True,
-      use_wandb=True
+      use_wandb=False
     ),
     callback=[contact_force_th_cl],
 )

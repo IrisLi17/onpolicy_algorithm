@@ -68,7 +68,7 @@ class CNNStatePolicy(ActorCriticPolicy):
             nn.Linear(hidden_size, 1)
         )
         self.aux_layer = nn.Sequential(
-            nn.Linear(2 * hidden_size, 3)
+            nn.Linear(hidden_size, 3)
         )
         self.aux_metric = nn.L1Loss()
         self.is_recurrent = False
