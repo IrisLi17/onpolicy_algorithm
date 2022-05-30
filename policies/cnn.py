@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from utils.distributions import Normal
+from torch.distributions import Categorical
 import torchvision
 
 
@@ -48,14 +49,16 @@ class CNNStatePolicy(ActorCriticPolicy):
         self.vf_state_encoder = nn.Linear(self.state_dim + self.previ_dim, self.hidden_size)
         self.pi_layer_norm = nn.LayerNorm(hidden_size + hidden_size)
         self.vf_layer_norm = nn.LayerNorm(hidden_size + hidden_size)
-        self.pi_mean_layers = nn.Sequential(
+        self.pi_feature_layer = nn.Sequential(
             nn.Linear(hidden_size + hidden_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, self.action_dim)
+            nn.ReLU()
         )
-        self.pi_logstd = nn.Parameter(torch.zeros(self.action_dim), requires_grad=True)
+        self.pi_mean_layer = nn.Linear(hidden_size, self.action_dim - 1)
+        self.gripper_layer = nn.Linear(hidden_size, 3)
+        # Modify architecture as in MLP!
+        self.pi_logstd = nn.Parameter(torch.zeros(self.action_dim - 1), requires_grad=True)
         vf_input_dim = hidden_size if self.state_only_critic else 2 * hidden_size
         self.vf_layers = nn.Sequential(
             nn.Linear(vf_input_dim, hidden_size),
@@ -77,8 +80,8 @@ class CNNStatePolicy(ActorCriticPolicy):
             if isinstance(net, nn.Linear):
                 nn.init.orthogonal_(net.weight, gain=np.sqrt(2))
                 nn.init.constant_(net.bias, 0.)
-        nn.init.orthogonal_(self.pi_mean_layers[-1].weight, gain=0.01)
-        nn.init.constant_(self.pi_mean_layers[-1].bias, 0.)
+        nn.init.orthogonal_(self.pi_mean_layer.weight, gain=0.01)
+        nn.init.constant_(self.pi_mean_layer.bias, 0.)
     
     @torch.jit.ignore
     def forward(self, obs, rnn_hxs=None, rnn_masks=None, previ_obs=None, forward_value=True):
@@ -90,8 +93,10 @@ class CNNStatePolicy(ActorCriticPolicy):
         image_feature = self.image_projector(self.image_encoder(image_obs).reshape((batch_size, -1)))
         pi_state_feature = self.pi_state_encoder(state_obs)
         pi_feature = self.pi_layer_norm(torch.cat([image_feature, pi_state_feature], dim=-1))
-        action_mean = self.pi_mean_layers(pi_feature)
-        dist = Normal(loc=action_mean, scale=torch.exp(self.pi_logstd))
+        pi_feature = self.pi_feature_layer(pi_feature)
+        arm_mean = self.pi_mean_layer(pi_feature)
+        gripper_logits = self.gripper_layer(pi_feature)
+        dist = [Normal(loc=arm_mean, scale=torch.exp(self.pi_logstd)), Categorical(logits=gripper_logits)]
         if forward_value:
             if not self.state_only_critic:
                 critic_image_feature = self.critic_image_projector(self.critic_image_encoder(image_obs).reshape((batch_size, -1)))
@@ -113,16 +118,22 @@ class CNNStatePolicy(ActorCriticPolicy):
     def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False, previ_obs=None, forward_value=True):
         value, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks, previ_obs, forward_value)
         if deterministic:
-            action = action_dist.mean
+            arm_action = action_dist[0].mean
+            gripper_action = torch.argmax(action_dist[1], dim=-1, keepdim=True)
         else:
-            action = action_dist.sample([])
-        log_probs = torch.sum(action_dist.log_prob(action), dim=-1, keepdim=True)
+            arm_action = action_dist[0].sample([])
+            gripper_action = action_dist[1].sample().unsqueeze(dim=-1)
+        normed_gripper_action = gripper_action / 2.0 * 2 - 1
+        action = torch.cat([arm_action, normed_gripper_action], dim=-1)
+        log_probs = action_dist[0].log_prob(arm_action).sum(dim=-1, keepdim=True) + action_dist[1].log_prob(gripper_action.squeeze(dim=-1)).unsqueeze(dim=-1)
         return value, action, log_probs, rnn_hxs
     
     def evaluate_actions(self, obs, rnn_hxs=None, rnn_masks=None, actions=None):
         _, action_dist, rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks, forward_value=False)
-        log_probs = torch.sum(action_dist.log_prob(actions), dim=-1, keepdim=True)
-        entropy = action_dist.entropy()
+        arm_action = torch.narrow(actions, dim=1, start=0, length=3)
+        gripper_action = ((torch.narrow(actions, dim=1, start=3, length=1) + 1) / 2 * 2).to(torch.int)
+        log_probs = action_dist[0].log_prob(arm_action).sum(dim=-1, keepdim=True) + action_dist[1].log_prob(gripper_action.squeeze(dim=-1)).unsqueeze(dim=-1)
+        entropy = action_dist[0].entropy()
         return log_probs, entropy, rnn_hxs
     
     def compute_aux_loss(self, obs, rnn_hxs=None, rnn_masks=None, aux_input=None):
@@ -133,6 +144,7 @@ class CNNStatePolicy(ActorCriticPolicy):
         image_feature = self.image_projector(self.image_encoder(image_obs).reshape((batch_size, -1)))
         pi_state_feature = self.pi_state_encoder(state_obs)
         pi_feature = self.pi_layer_norm(torch.cat([image_feature, pi_state_feature], dim=-1))
+        pi_feature = self.pi_feature_layer(pi_feature)
         predict = self.aux_layer(pi_feature)
         aux_ground_truth = torch.narrow(aux_input, dim=1, start=0, length=3)
         loss = self.aux_metric(predict, aux_ground_truth.detach())
@@ -148,7 +160,11 @@ class CNNStatePolicy(ActorCriticPolicy):
         image_feature = self.image_projector(self.image_encoder(image_obs).reshape((batch_size, -1)))
         pi_state_feature = self.pi_state_encoder(state_obs)
         pi_feature = self.pi_layer_norm(torch.cat([image_feature, pi_state_feature], dim=-1))
-        action_mean = self.pi_mean_layers(pi_feature)
+        pi_feature = self.pi_feature_layer(pi_feature)
+        arm_action = self.pi_mean_layer(pi_feature)
+        gripper_action = torch.argmax(self.gripper_layer(pi_feature), dim=-1, keepdim=True)
+        normed_gripper_action = gripper_action / 2.0 * 2 - 1
+        action_mean = torch.cat([arm_action, normed_gripper_action], dim=-1)
         return action_mean
 
 

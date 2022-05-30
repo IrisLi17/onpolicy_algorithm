@@ -368,6 +368,7 @@ class PPO(object):
                 pass
         obs_buffer = np.concatenate(obs_buffer, axis=0)
         actions_buffer = np.concatenate(actions_buffer, axis=0)
+        state_obs_buffer = np.concatenate(state_obs_buffer, axis=0)
         optimizer = optim.Adam(self.policy.parameters(), lr=2.5e-4)
         n_epoch = self.n_imitation_epoch
         batch_size = 64
@@ -393,7 +394,7 @@ class PPO(object):
                 mb_ids = inds[m * batch_size: (m + 1) * batch_size]
                 obs_batch = obs_buffer[mb_ids]
                 actions_batch = action_buffer[mb_ids]
-                state_obs_batch = state_obs_batch[mb_ids]
+                state_obs_batch = state_obs_buffer[mb_ids]
                 action_log_probs, dist_entropy, _ = self.policy.evaluate_actions(
                     obs_batch, None, None,
                     actions_batch)

@@ -280,17 +280,17 @@ class PandaExpertPolicy(ActorCriticPolicy):
         # actions[torch.where(before_reach_before_open), 3] = 1.0
         actions[:, 3] = 1.0 * (self.phase == 0).to(torch.float)
         to_approach = approach_pos - eef_pos
-        actions[:, :3] += 20 * to_approach * (self.phase == 1).unsqueeze(dim=-1)
+        actions[:, :3] += torch.clamp(20 * to_approach * (self.phase == 1).unsqueeze(dim=-1), -1.0, 1.0)
         to_box = box_pos - eef_pos
         # actions[torch.where(before_reach_after_open), :3] = torch.clamp(20 * to_box[before_reach_after_open], -1, 1)
-        actions[:, :3] += 20 * to_box * (self.phase == 2).unsqueeze(dim=-1)
+        actions[:, :3] += torch.clamp(20 * to_box * (self.phase == 2).unsqueeze(dim=-1), -1.0, 1.0)
         # actions[torch.where(after_reach_before_close), 3] = -1.0
         actions[:, 3] += -1.0 * (self.phase == 3).to(torch.float)
         
-        actions[:, :3] += 20 * (goal_approach_pos - eef_pos) * (self.phase == 4).unsqueeze(dim=-1)
+        actions[:, :3] += torch.clamp(20 * (goal_approach_pos - eef_pos) * (self.phase == 4).unsqueeze(dim=-1), -1.0, 1.0)
         to_goal = goal_pos - eef_pos
         # actions[torch.where(after_reach_after_close), :3] = torch.clamp(20 * to_goal[after_reach_after_close], -1, 1)
-        actions[:, :3] += 20 * to_goal * (self.phase == 5).unsqueeze(dim=-1)
+        actions[:, :3] += torch.clamp(20 * to_goal * (self.phase == 5).unsqueeze(dim=-1), -1.0, 1.0)
         
         # print(actions[0])
         return None, actions, None, None
