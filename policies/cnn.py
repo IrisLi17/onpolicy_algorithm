@@ -22,6 +22,7 @@ class CNNStatePolicy(ActorCriticPolicy):
         self.hidden_size = hidden_size
         self.previ_dim = previ_dim
         self.state_only_critic = state_only_critic
+        self.image_transformer = torchvision.transforms.ColorJitter(hue=0.1)
         
         self.image_encoder = nn.Sequential(
             nn.Conv2d(self.image_shape[1], 2 * self.image_shape[1], 8, 4, 0),
@@ -89,6 +90,7 @@ class CNNStatePolicy(ActorCriticPolicy):
         batch_size = obs.shape[0]
         image_obs = torch.narrow(obs, dim=1, start=0, length=torch.prod(torch.tensor(self.image_shape)))
         image_obs = image_obs.reshape((-1, *self.image_shape[1:]))  # (batch_size * L, C, H, W)
+        image_obs = self.image_transformer(image_obs)
         state_obs = torch.narrow(obs, dim=1, start=torch.prod(torch.tensor(self.image_shape)), length=self.state_dim)
         image_feature = self.image_projector(self.image_encoder(image_obs).reshape((batch_size, -1)))
         pi_state_feature = self.pi_state_encoder(state_obs)
