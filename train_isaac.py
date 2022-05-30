@@ -125,7 +125,7 @@ def evaluate(env, policy, n_episode):
             _, actions, _, recurrent_hidden_state = policy.act(obs, recurrent_hidden_state, recurrent_mask, deterministic=False, forward_value=False)
         step_count += 1
         episode_length += 1
-        # print(step_count, obs[0])
+        # print(step_count, obs[0][10:12], actions[0][-1])
         if actions[0][-1].abs() > 0.5:
             print(step_count, actions[0])
         obs, reward, done, info = env.step(actions)
@@ -140,11 +140,12 @@ def collect_imitation_demo(env, load_path, image_policy, n_episode, save_feature
     import torch
     import numpy as np
     import pickle
-    from policies.mlp import MlpGaussianPolicy
-    state_policy = MlpGaussianPolicy(env.cfg.env.num_state_obs, env.num_actions, hidden_size=64)
-    state_policy.to(env.device)
-    checkpoint = torch.load(load_path, map_location=env.device)
-    state_policy.load_state_dict(checkpoint['policy'], strict=False)
+    from policies.mlp import MlpGaussianPolicy, PandaExpertPolicy
+    # state_policy = MlpGaussianPolicy(env.cfg.env.num_state_obs, env.num_actions, hidden_size=64)
+    # state_policy.to(env.device)
+    # checkpoint = torch.load(load_path, map_location=env.device)
+    # state_policy.load_state_dict(checkpoint['policy'], strict=False)
+    state_policy = PandaExpertPolicy(device=env.device)
     episode_count = 0
     if os.path.exists("imitation_data.pkl"):
         os.remove("imitation_data.pkl")
@@ -174,6 +175,9 @@ def collect_imitation_demo(env, load_path, image_policy, n_episode, save_feature
                     print("episode count", episode_count, "episode reward", np.sum(demo[i]["reward"]))
                     with open("imitation_data.pkl", "ab") as f:
                         pickle.dump(demo[i], f)
+                else:
+                    print("fail")
+                state_policy.reset(i)
                 demo[i] = dict(image_obs=[], state_obs=[], action=[], reward=[])
                 if episode_count >= n_episode:
                     break

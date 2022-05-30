@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from utils.distributions import Normal
+import torchvision
 
 
 class CNNStatePolicy(ActorCriticPolicy):
@@ -162,6 +163,7 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
         self.hidden_size = hidden_size
         self.previ_dim = previ_dim
         self.state_only_critic = state_only_critic
+        self.image_transformer = torchvision.transforms.ColorJitter(hue=0.1)
 
         # Recurrent perception part
         self.image_encoder = nn.Sequential(
@@ -232,6 +234,7 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
     def _forward_policy_feature(self, obs: torch.Tensor, rnn_hxs: torch.Tensor, rnn_masks: torch.Tensor):
         assert obs.shape[-1] == torch.prod(torch.tensor(self.image_shape)) + self.state_dim
         image_obs = torch.narrow(obs, dim=1, start=0, length=torch.prod(torch.tensor(self.image_shape))).reshape((-1, *self.image_shape))
+        image_obs = self.image_transformer(image_obs)
         state_obs = torch.narrow(obs, dim=1, start=torch.prod(torch.tensor(self.image_shape)), length=self.state_dim)
         image_feature = self.image_projector(self.image_encoder(image_obs))
         state_feature = self.state_encoder(state_obs)
@@ -253,6 +256,7 @@ class CNNStateHistoryPolicy(ActorCriticPolicy):
     def _forward_critic_feature(self, obs: torch.Tensor, previ_obs: torch.Tensor):
         assert obs.shape[-1] == torch.prod(torch.tensor(self.image_shape)) + self.state_dim
         image_obs = torch.narrow(obs, dim=1, start=0, length=torch.prod(torch.tensor(self.image_shape))).reshape((-1, *self.image_shape))
+        image_obs = self.image_transformer(image_obs)
         state_obs = torch.narrow(obs, dim=1, start=torch.prod(torch.tensor(self.image_shape)), length=self.state_dim)
         if not self.state_only_critic:
             critic_image_feature = self.critic_image_projector(self.critic_image_encoder(image_obs))

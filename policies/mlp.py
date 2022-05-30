@@ -237,7 +237,7 @@ class PandaSepPolicy(ActorCriticPolicy):
         arm_action = torch.narrow(actions, dim=1, start=0, length=3)
         gripper_action = ((torch.narrow(actions, dim=1, start=3, length=1) + 1) / 2 * 2).to(torch.int)
         log_prob = action_dist[0].log_prob(arm_action).sum(dim=-1, keepdim=True) + action_dist[1].log_prob(gripper_action.squeeze(dim=-1)).unsqueeze(dim=-1)
-        entropy = (action_dist[0].entropy().sum(dim=-1) + action_dist[1].entropy()) / 4
+        entropy = action_dist[0].entropy()
         return log_prob, entropy, rnn_hxs
     
     def take_action(self, obs):
@@ -249,6 +249,56 @@ class PandaSepPolicy(ActorCriticPolicy):
         return action
 
 
+class PandaExpertPolicy(ActorCriticPolicy):
+    def __init__(self, device):
+        super(PandaExpertPolicy, self).__init__()
+        self.device = device
+        self.phase = None
+    
+    def act(self, obs, deterministic):
+        assert obs.shape[-1] == 18
+        if self.phase is None:
+            self.phase = torch.zeros(obs.shape[0], dtype=torch.int, device=self.device)
+        box_pos = obs[:, :3]
+        approach_pos = box_pos + torch.tensor([[0., 0., 0.1]], device=self.device, dtype=torch.float)
+        eef_pos = obs[:, 3:6]
+        gripper_width = torch.sum(obs[:, 10:12], dim=-1)
+        goal_pos = obs[:, 15:18]
+        goal_approach_pos = goal_pos + torch.tensor([[0., 0., 0.02]], device=self.device, dtype=torch.float)
+        # before_reach_before_open = torch.logical_and(torch.norm(box_pos - eef_pos, dim=-1) > 0.005, gripper_width < 0.075)
+        # before_reach_after_open = torch.logical_and(torch.norm(box_pos - eef_pos, dim=-1) > 0.005, gripper_width >= 0.075)
+        # after_reach_before_close = torch.logical_and(torch.norm(box_pos - eef_pos, dim=-1) <= 0.01, gripper_width >= 0.051)
+        # after_reach_after_close = torch.logical_and(torch.norm(box_pos - eef_pos, dim=-1) <= 0.01, gripper_width < 0.051)
+        inc_phase = torch.zeros(obs.shape[0], dtype=torch.bool, device=self.device)
+        inc_phase[torch.logical_and(self.phase == 0, gripper_width >= 0.075)] = True
+        inc_phase[torch.logical_and(self.phase == 1, torch.norm(approach_pos - eef_pos, dim=-1) <= 0.01)] = True
+        inc_phase[torch.logical_and(self.phase == 2, torch.norm(box_pos - eef_pos, dim=-1) <= 0.01)] = True
+        inc_phase[torch.logical_and(self.phase == 3, gripper_width < 0.051)] = True
+        inc_phase[torch.logical_and(self.phase == 4, torch.norm(goal_approach_pos - eef_pos, dim=-1) <= 0.01)] = True
+        self.phase += inc_phase.to(torch.int)
+        actions = torch.zeros(obs.shape[0], 4, device=self.device)
+        # actions[torch.where(before_reach_before_open), 3] = 1.0
+        actions[:, 3] = 1.0 * (self.phase == 0).to(torch.float)
+        to_approach = approach_pos - eef_pos
+        actions[:, :3] += 20 * to_approach * (self.phase == 1).unsqueeze(dim=-1)
+        to_box = box_pos - eef_pos
+        # actions[torch.where(before_reach_after_open), :3] = torch.clamp(20 * to_box[before_reach_after_open], -1, 1)
+        actions[:, :3] += 20 * to_box * (self.phase == 2).unsqueeze(dim=-1)
+        # actions[torch.where(after_reach_before_close), 3] = -1.0
+        actions[:, 3] += -1.0 * (self.phase == 3).to(torch.float)
+        
+        actions[:, :3] += 20 * (goal_approach_pos - eef_pos) * (self.phase == 4).unsqueeze(dim=-1)
+        to_goal = goal_pos - eef_pos
+        # actions[torch.where(after_reach_after_close), :3] = torch.clamp(20 * to_goal[after_reach_after_close], -1, 1)
+        actions[:, :3] += 20 * to_goal * (self.phase == 5).unsqueeze(dim=-1)
+        
+        # print(actions[0])
+        return None, actions, None, None
+    
+    def reset(self, idx):
+        if self.phase is not None:
+            self.phase[idx] *= 0
+     
 class PandaHybridPolicy(ActorCriticPolicy):
     def __init__(self, obs_dim, hidden_size):
         super(PandaHybridPolicy, self).__init__()
