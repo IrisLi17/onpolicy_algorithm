@@ -38,7 +38,7 @@ class PushConfig(BaseConfig):
         contact_force_th = 30.0
     
     class domain_randomization(BaseConfig.domain_randomization):
-        friction_range = [1.0, 2.5]
+        friction_range = [1.0, 1.5]
 
 
 def goal_in_air_cl(_locals, _globals):
@@ -47,7 +47,7 @@ def goal_in_air_cl(_locals, _globals):
         ep_infos = _locals["ep_infos"]
         success_rate = torch.mean(torch.tensor(ep_infos["is_success"]).float()).item()
         cur_goal_in_air_ratio = _locals["self"].env.goal_in_air
-        if success_rate > 0.6:
+        if success_rate > 0.7:
             _locals["self"].env.set_goal_in_air_ratio(min(cur_goal_in_air_ratio + 0.1, 1.0))
         print("Goal in air ratio =", _locals["self"].env.goal_in_air)
 
@@ -66,13 +66,15 @@ def contact_force_th_cl(_locals, _globals):
 config = dict(
     env_id="IsaacPandaPushState-v0",
     algo="ppo",
-    name="rand_table_height_sepfinger_fixori_fric1-2.5",
+    name="push_seppolicy_randsym_noxpen_nogripperent_fric1-1.5",
     # name="test_joint_decimal6_1024w_step64_dense",
     total_timesteps=int(3e8),
     entry_point=PandaPushEnv,
     env_config=PushConfig(),
-    policy_type="mlp",
+    # policy_type="mlp",
+    policy_type=("policies.mlp", "PandaSepPolicy"),
     policy=dict(
+        obs_dim=18,
         hidden_size=128,
         n_layers=3,
         # num_bin=21,
