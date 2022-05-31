@@ -210,6 +210,7 @@ class PandaSepPolicy(ActorCriticPolicy):
         nn.init.orthogonal_(self.arm_action_mean.weight, gain=0.01)
         nn.init.constant_(self.arm_action_mean.bias, 0.)
     
+    @torch.jit.ignore
     def forward(self, obs, rnn_hxs=None, rnn_masks=None, previ_obs=None):
         policy_features = self.policy_feature(obs)
         arm_action_mean = self.arm_action_mean(policy_features)
@@ -240,6 +241,7 @@ class PandaSepPolicy(ActorCriticPolicy):
         entropy = action_dist[0].entropy()
         return log_prob, entropy, rnn_hxs
     
+    @torch.jit.export
     def take_action(self, obs):
         policy_features = self.policy_feature(obs)
         arm_action_mean = self.arm_action_mean(policy_features)
