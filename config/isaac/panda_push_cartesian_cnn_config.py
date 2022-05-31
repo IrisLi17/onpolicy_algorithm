@@ -51,6 +51,10 @@ class PushConfig(BaseConfig):
     class safety(BaseConfig.safety):
         brake_on_contact = False
         contact_force_th = 30.0
+    
+    class domain_randomization(BaseConfig.domain_randomization):
+        rand_light_dir = True
+        rand_light_ambient = True
 
 
 def goal_in_air_cl(_locals, _globals):
@@ -78,7 +82,7 @@ def contact_force_th_cl(_locals, _globals):
 config = dict(
     env_id="IsaacPandaPushCNN-v0",
     algo="ppo",
-    name="1i1s_oldcam_bcexpert30_prvlg",
+    name="1i1s_oldcam_bcexpert_prvlg_color_randamb_randdir",
     # name="1i1s_oldcam_bc30_statenoise_camurdf_contact-0.1",
     # name="test_joint_decimal6_1024w_step64_dense",
     total_timesteps=int(2e7),
