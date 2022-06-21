@@ -5,6 +5,7 @@ from utils.monitor import Monitor
 from vec_env.subproc_vec_env import SubprocVecEnv
 import torch
 import sys
+'''
 try:
     import panda_gym
 except ImportError:
@@ -17,7 +18,7 @@ try:
     sys.path.remove("../motion_imitation")
 except:
     pass
-
+'''
 try:
     sys.path.append("../stacking_env")
     import env

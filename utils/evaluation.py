@@ -22,8 +22,8 @@ def evaluate(env, policy, n_episode):
         img = env.render(mode="rgb_array")
         ax.cla()
         ax.imshow(img)
-        # plt.imsave("tmp/tmp%d.png" % frame_count, img)
-        plt.pause(0.01)
+        plt.imsave("tmp/tmp%d.png" % frame_count, img)
+        # plt.pause(0.01)
         with torch.no_grad():
             _, actions, _, _ = policy.act(obs, deterministic=True)
         # if frame_count == reset_step:

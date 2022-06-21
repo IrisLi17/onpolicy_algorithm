@@ -3,3 +3,5 @@ __pycache__
 logs
 tmp
 *.png
+wandb
+*.pt
