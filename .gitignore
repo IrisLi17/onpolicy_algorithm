@@ -4,4 +4,3 @@ logs
 tmp
 *.png
 wandb
-*.pt
