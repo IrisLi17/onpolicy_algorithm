@@ -34,7 +34,7 @@ def main():
     import sys
     sys.path.append("../stacking_env")
     from bullet_envs.utils.make_vec_env import make_vec_env
-    env = make_vec_env(config["env_id"], config["num_workers"], device, log_dir=config["log_dir"])
+    env = make_vec_env(config["env_id"], config["num_workers"], device, log_dir=config["log_dir"], **config["create_env_kwargs"])
     print(env.observation_space, env.action_space)
     sys.path.remove("../stacking_env")
     policy = HybridMlpPolicy(**config["policy"])

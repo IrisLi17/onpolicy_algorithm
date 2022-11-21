@@ -6,7 +6,8 @@ config = dict(
     log_dir="logs/BulletDrawer-v1/test",
     total_timesteps=int(1e6),
     create_env_kwargs=dict(
-        ),
+        kwargs=dict(reward_type="sparse"),
+    ),
     policy=dict(
         mvp_feat_dim=768, 
         state_obs_dim=18, 
@@ -19,6 +20,6 @@ config = dict(
     ),
     train=dict(
         use_wandb=False,
-        n_steps=256,
+        n_steps=1024,
     )
 )
