@@ -34,11 +34,14 @@ class PPO(object):
         self.use_linear_lr_decay = use_linear_lr_decay
         self.use_wandb = use_wandb
 
-        if isinstance(self.env, VecEnv):
+        # if isinstance(self.env, VecEnv):
+        #     self.n_envs = self.env.num_envs
+        # else:
+        #     self.n_envs = 1
+        if hasattr(self.env, "num_envs"):
             self.n_envs = self.env.num_envs
         else:
             self.n_envs = 1
-
         self.rollouts = RolloutStorage(self.n_steps, self.n_envs,
                                        self.env.observation_space.shape, self.env.action_space,
                                        self.policy.recurrent_hidden_state_size)

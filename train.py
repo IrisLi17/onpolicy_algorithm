@@ -1,8 +1,7 @@
 import importlib
 
 import torch, os
-from utils.make_env import make_vec_env, ObsParser, StackingObsParser
-from policies.attention_discrete import AttentionDiscretePolicy
+from policies.mvp_hybrid_policy import HybridMlpPolicy
 import argparse
 from utils import logger
 
@@ -32,29 +31,19 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if args.play:
         config["num_workers"] = 1
-    env = make_vec_env(config["env_id"], config["num_workers"], device, log_dir=config["log_dir"],
-                       training=(not args.play), **config["create_env_kwargs"])
-    if config["policy_type"] == "attention_discrete":
-        # implement obs_parser
-        obs_parser = StackingObsParser(**config["obs_parser"])
-        policy = AttentionDiscretePolicy(obs_parser, env.action_space.shape[0], **config["policy"])
-    elif config["policy_type"] == "attention_gaussian":
-        obs_parser = ObsParser(**config["obs_parser"])
-        from policies.attention_discrete import AttentionGaussianPolicy
-        policy = AttentionGaussianPolicy(obs_parser, env.action_space.shape[0], **config["policy"])
-    elif config["policy_type"] == "mlp":
-        from policies.mlp import MlpGaussianPolicy
-        policy = MlpGaussianPolicy(env.observation_space.shape[0], env.action_space.shape[0], **config["policy"])
-    elif isinstance(config["policy_type"], tuple):
-        policy_class = importlib.import_module(config["policy_type"][0])
-        policy = policy_class.__getattribute__(config["policy_type"][1])(**config["policy"])
-    else:
-        raise NotImplementedError
+    import sys
+    sys.path.append("../stacking_env")
+    from bullet_envs.utils.make_vec_env import make_vec_env
+    env = make_vec_env(config["env_id"], config["num_workers"], device, log_dir=config["log_dir"])
+    print(env.observation_space, env.action_space)
+    sys.path.remove("../stacking_env")
+    policy = HybridMlpPolicy(**config["policy"])
     policy.to(device)
     if config["algo"] == "ppo":
         from onpolicy import PPO
         model = PPO(env, policy, device, **config.get("train", {}))
     elif config["algo"] == "pair":
+        raise NotImplementedError
         from onpolicy import PAIR
         eval_env = make_vec_env(config["env_id"], 20, device, **config["create_env_kwargs"])
         model = PAIR(env, policy, device=device, eval_env=eval_env, **config.get("train", {}))
