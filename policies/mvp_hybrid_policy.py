@@ -20,7 +20,7 @@ class HybridMlpPolicy(ActorCriticPolicy):
         self.act_type = nn.Sequential(
             nn.Linear(2 * proj_img_dim + proj_state_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, n_primitive), nn.Softmax(dim=-1),
+            nn.Linear(hidden_dim, n_primitive),
         )
         self.act_param = nn.ModuleList([nn.Sequential(
             nn.Linear(2 * proj_img_dim + proj_state_dim, hidden_dim), nn.ReLU(),
