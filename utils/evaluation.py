@@ -7,23 +7,24 @@ def evaluate(env, policy, n_episode):
     episode_count = 0
     frame_count = 0
     obs = env.reset()
-    print("obs", obs)
+    print("goal state", env.get_attr("goal")[0]["state"])
     episode_reward = 0
     episode_length = 0
     reset_step = 0
-    fig, ax = plt.subplots(1, 1)
-    if os.path.exists("tmp"):
-        shutil.rmtree("tmp")
-    os.makedirs("tmp", exist_ok=True)
+    env.env_method("start_rec", "output", indices=0)
+    # fig, ax = plt.subplots(1, 1)
+    # if os.path.exists("tmp"):
+    #     shutil.rmtree("tmp")
+    # os.makedirs("tmp", exist_ok=True)
     if hasattr(env, "obs_rms"):
         init_obs_mean = env.obs_rms.mean.copy()
         init_obs_std = env.obs_rms.var.copy()
     while episode_count < n_episode:
-        img = env.render(mode="rgb_array")
-        ax.cla()
-        ax.imshow(img)
+        # img = env.render(mode="rgb_array")
+        # ax.cla()
+        # ax.imshow(img)
         # plt.imsave("tmp/tmp%d.png" % frame_count, img)
-        plt.pause(0.01)
+        # plt.pause(0.01)
         with torch.no_grad():
             _, actions, _, _ = policy.act(obs, deterministic=True)
         # if frame_count == reset_step:
@@ -32,15 +33,18 @@ def evaluate(env, policy, n_episode):
         episode_reward += reward[0]
         episode_length += 1
         frame_count += 1
+        print("action", actions[0], "info", info[0]["handle_joint"])
         if hasattr(env, "obs_rms"):
             assert np.linalg.norm(env.obs_rms.mean - init_obs_mean) < 1e-5
             assert np.linalg.norm(env.obs_rms.var - init_obs_std) < 1e-5
         if done[0]:
             print("episode reward", episode_reward, "episode length", episode_length)
+            print("goal", env.get_attr("goal")[0]["state"])
             episode_count += 1
             episode_reward = 0
             episode_length = 0
             reset_step = frame_count
+    env.env_method("end_rec", indices=0)
 
 
 def evaluate_fixed_states(env, policy, device, initial_states, goals, n_episode=100, deterministic=True, debug=False):
