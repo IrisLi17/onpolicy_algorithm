@@ -98,6 +98,6 @@ class HybridMlpPolicy(ActorCriticPolicy):
         ]
         log_prob = torch.sum(torch.stack([act_type_logprob] + act_param_logprob, dim=-1), dim=-1, keepdim=True)
         act_type_ent = act_type_dist.entropy()
-        act_param_ent = [act_param_dist[i].entropy() * use_param_mask for i in range(self.act_dim)]
+        act_param_ent = [act_param_dist[i].entropy() * 1 for i in range(self.act_dim)]
         entropy = torch.sum(torch.stack([act_type_ent] + act_param_ent, dim=-1), dim=-1).mean()
         return log_prob, entropy, rnn_hxs
