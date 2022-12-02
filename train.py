@@ -51,7 +51,7 @@ def main():
         raise NotImplementedError
 
     def callback(locals, globals):
-        if locals["j"] % 50 == 0:
+        if locals["j"] % config["save_interval"] == 0:
             model.save(os.path.join(config["log_dir"], "model_%d.pt" % locals["j"]))
 
     logger.log(config)
