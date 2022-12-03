@@ -18,20 +18,24 @@ class HybridMlpPolicy(ActorCriticPolicy):
         self.num_bin = num_bin
         self.mvp_projector = nn.Linear(mvp_feat_dim, proj_img_dim)
         self.state_linear = nn.Linear(state_obs_dim, proj_state_dim)
+        self.image_state_joint_encoder = nn.Sequential(
+            nn.Linear(proj_img_dim + proj_state_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.ReLU()
+        )
         self.act_type = nn.Sequential(
-            nn.Linear(2 * proj_img_dim + proj_state_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
             # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, n_primitive),
         )
         self.act_param = nn.ModuleList([nn.Sequential(
-            nn.Linear(2 * proj_img_dim + proj_state_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
             # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, num_bin)
         ) for _ in range(act_dim)])
         self.value_layers = nn.Sequential(
-            nn.Linear(2 * proj_img_dim + proj_state_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
             # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, 1)
@@ -53,14 +57,21 @@ class HybridMlpPolicy(ActorCriticPolicy):
         cur_img_feat = torch.narrow(obs, dim=-1, start=0, length=self.mvp_feat_dim)
         cur_state = torch.narrow(obs, dim=-1, start=self.mvp_feat_dim, length=self.state_obs_dim)
         goal_img_feat = torch.narrow(obs, dim=-1, start=self.mvp_feat_dim + self.state_obs_dim, length=self.mvp_feat_dim)
-        return cur_img_feat.detach(), cur_state.detach(), goal_img_feat.detach()
+        goal_robot_state = torch.narrow(obs, dim=-1, start=2 * self.mvp_feat_dim + self.state_obs_dim, length=self.state_obs_dim)
+        return cur_img_feat.detach(), cur_state.detach(), goal_img_feat.detach(), goal_robot_state.detach()
 
     def forward(self, obs, rnn_hxs=None, rnn_masks=None):
-        cur_img_feat, cur_state, goal_img_feat = self._obs_parser(obs)
+        cur_img_feat, cur_state, goal_img_feat, goal_robot_state = self._obs_parser(obs)
         proj_cur_feat = self.mvp_projector(cur_img_feat)
         proj_goal_feat = self.mvp_projector(goal_img_feat)
         proj_state_feat = self.state_linear(cur_state)
-        proj_input = torch.cat([proj_cur_feat, proj_state_feat, proj_goal_feat], dim=-1)
+        proj_goal_robot_feat = self.state_linear(goal_robot_state)
+        proj_cur = torch.cat([proj_cur_feat, proj_state_feat], dim=-1)
+        proj_goal = torch.cat([proj_goal_feat, proj_goal_robot_feat], dim=-1)
+        proj_input = torch.cat([
+            self.image_state_joint_encoder(proj_cur), 
+            self.image_state_joint_encoder(proj_goal)
+        ], dim=-1)
         act_type_logits = self.act_type(proj_input)
         act_type_dist = Categorical(logits=act_type_logits)
         act_param_logits = [self.act_param[i](proj_input) for i in range(len(self.act_param))]
