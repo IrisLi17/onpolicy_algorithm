@@ -36,6 +36,9 @@ def main():
     from bullet_envs.utils.make_vec_env import make_vec_env
     env = make_vec_env(config["env_id"], config["num_workers"], device, log_dir=config["log_dir"], **config["create_env_kwargs"])
     print(env.observation_space, env.action_space)
+    if config["policy"].get("use_privilege", False):
+        config["policy"]["privilege_dim"] = env.get_attr("privilege_dim")[0]
+        del config["policy"]["use_privilege"]
     sys.path.remove("../stacking_env")
     policy = HybridMlpPolicy(**config["policy"])
     policy.to(device)

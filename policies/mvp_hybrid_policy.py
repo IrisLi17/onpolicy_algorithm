@@ -8,16 +8,22 @@ from torch.distributions.categorical import Categorical
 class HybridMlpPolicy(ActorCriticPolicy):
     def __init__(
         self, mvp_feat_dim, state_obs_dim, n_primitive, act_dim, num_bin,
-        hidden_dim, proj_img_dim, proj_state_dim, use_param_mask=False
+        hidden_dim, proj_img_dim, proj_state_dim, use_param_mask=False,
+        privilege_dim=0
     ) -> None:
         super().__init__()
         self.mvp_feat_dim = mvp_feat_dim
         self.state_obs_dim = state_obs_dim
+        self.privilege_dim = privilege_dim
         self.n_primitive = n_primitive
         self.act_dim = act_dim
         self.num_bin = num_bin
         self.mvp_projector = nn.Linear(mvp_feat_dim, proj_img_dim)
         self.state_linear = nn.Linear(state_obs_dim, proj_state_dim)
+        if privilege_dim > 0:
+            self.privilege_state_linear = nn.Linear(state_obs_dim + privilege_dim, proj_state_dim)
+        else:
+            self.privilege_state_linear = None
         self.act_type = nn.Sequential(
             nn.Linear(2 * proj_img_dim + proj_state_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
@@ -53,19 +59,25 @@ class HybridMlpPolicy(ActorCriticPolicy):
         cur_img_feat = torch.narrow(obs, dim=-1, start=0, length=self.mvp_feat_dim)
         cur_state = torch.narrow(obs, dim=-1, start=self.mvp_feat_dim, length=self.state_obs_dim)
         goal_img_feat = torch.narrow(obs, dim=-1, start=self.mvp_feat_dim + self.state_obs_dim, length=self.mvp_feat_dim)
-        return cur_img_feat.detach(), cur_state.detach(), goal_img_feat.detach()
+        privilege_info = torch.narrow(obs, dim=-1, start=2 * self.mvp_feat_dim + self.state_obs_dim, length=self.privilege_dim)
+        return cur_img_feat.detach(), cur_state.detach(), goal_img_feat.detach(), privilege_info.detach()
 
     def forward(self, obs, rnn_hxs=None, rnn_masks=None):
-        cur_img_feat, cur_state, goal_img_feat = self._obs_parser(obs)
+        cur_img_feat, cur_state, goal_img_feat, privilege_info = self._obs_parser(obs)
         proj_cur_feat = self.mvp_projector(cur_img_feat)
         proj_goal_feat = self.mvp_projector(goal_img_feat)
         proj_state_feat = self.state_linear(cur_state)
         proj_input = torch.cat([proj_cur_feat, proj_state_feat, proj_goal_feat], dim=-1)
+        if self.privilege_state_linear is not None:
+            proj_priv_state_feat = self.privilege_state_linear(torch.cat([cur_state, privilege_info], dim=-1))
+            proj_value_input = torch.cat([proj_cur_feat, proj_priv_state_feat, proj_goal_feat], dim=-1)
+        else:
+            proj_value_input = proj_input
         act_type_logits = self.act_type(proj_input)
         act_type_dist = Categorical(logits=act_type_logits)
         act_param_logits = [self.act_param[i](proj_input) for i in range(len(self.act_param))]
         act_param_dist = [Categorical(logits=act_param_logits[i]) for i in range(self.act_dim)]
-        value_pred = self.value_layers(proj_input)
+        value_pred = self.value_layers(proj_value_input)
         return value_pred, (act_type_dist, act_param_dist), rnn_hxs
     
     def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False):
