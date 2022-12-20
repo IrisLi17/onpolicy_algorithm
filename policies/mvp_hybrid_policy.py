@@ -8,7 +8,7 @@ from torch.distributions.categorical import Categorical
 class HybridMlpPolicy(ActorCriticPolicy):
     def __init__(
         self, mvp_feat_dim, state_obs_dim, n_primitive, act_dim, num_bin,
-        hidden_dim, proj_img_dim, proj_state_dim, use_param_mask=False,
+        hidden_dim, proj_img_dim, proj_state_dim,
         privilege_dim=0
     ) -> None:
         super().__init__()
@@ -44,7 +44,7 @@ class HybridMlpPolicy(ActorCriticPolicy):
         )
         self.is_recurrent = False
         self.recurrent_hidden_state_size = 1
-        self.use_param_mask = use_param_mask
+        self.use_param_mask = False
         # self.init_weights(self.act_type, [np.sqrt(2), np.sqrt(2), 0.01])
         # for i in range(act_dim):
         #     self.init_weights(self.act_param[i], [np.sqrt(2), np.sqrt(2), 0.01])
