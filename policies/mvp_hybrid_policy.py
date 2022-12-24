@@ -120,3 +120,45 @@ class HybridMlpPolicy(ActorCriticPolicy):
         act_param_ent = [act_param_dist[i].entropy() * use_param_mask for i in range(self.act_dim)]
         entropy = torch.sum(torch.stack([act_type_ent] + act_param_ent, dim=-1), dim=-1).mean()
         return log_prob, entropy, rnn_hxs
+
+
+class HybridMlpStatePolicy(HybridMlpPolicy):
+    def __init__(self, state_obs_dim, n_primitive, act_dim, num_bin, hidden_dim) -> None:
+        ActorCriticPolicy.__init__(self)
+        self.state_obs_dim = state_obs_dim
+        self.n_primitive = n_primitive
+        self.act_dim = act_dim
+        self.num_bin = num_bin
+        self.act_type = nn.Sequential(
+            nn.Linear(state_obs_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, n_primitive),
+        )
+        self.act_param = nn.ModuleList([nn.Sequential(
+            nn.Linear(state_obs_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, num_bin)
+        ) for _ in range(act_dim)])
+        self.value_layers = nn.Sequential(
+            nn.Linear(state_obs_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+        self.is_recurrent = False
+        self.recurrent_hidden_state_size = 1
+        self.use_param_mask = False
+        self.init_weights(self.act_type, [np.sqrt(2), np.sqrt(2), 0.01])
+        for i in range(act_dim):
+            self.init_weights(self.act_param[i], [np.sqrt(2), np.sqrt(2), 0.01])
+        self.init_weights(self.value_layers, [np.sqrt(2), np.sqrt(2), 1.0])
+
+    def forward(self, obs, rnn_hxs=None, rnn_masks=None):
+        act_type_logits = self.act_type(obs)
+        act_type_dist = Categorical(logits=act_type_logits)
+        act_param_logits = [self.act_param[i](obs) for i in range(len(self.act_param))]
+        act_param_dist = [Categorical(logits=act_param_logits[i]) for i in range(self.act_dim)]
+        value_pred = self.value_layers(obs)
+        return value_pred, (act_type_dist, act_param_dist), rnn_hxs

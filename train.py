@@ -40,7 +40,10 @@ def main():
         config["policy"]["privilege_dim"] = env.get_attr("privilege_dim")[0]
         del config["policy"]["use_privilege"]
     sys.path.remove("../stacking_env")
-    policy = HybridMlpPolicy(**config["policy"])
+    if config.get("policy_class") is not None:
+        policy = config["policy_class"](**config["policy"])
+    else:
+        policy = HybridMlpPolicy(**config["policy"])
     policy.to(device)
     if config["algo"] == "ppo":
         from onpolicy import PPO
