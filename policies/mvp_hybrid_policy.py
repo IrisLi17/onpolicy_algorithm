@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
+from torch.distributions.normal import Normal
 
 
 class HybridMlpPolicy(ActorCriticPolicy):
@@ -174,3 +175,72 @@ class HybridMlpStatePolicy(HybridMlpPolicy):
         act_param_dist = [Categorical(logits=act_param_logits[i]) for i in range(self.act_dim)]
         value_pred = self.value_layers(obs)
         return value_pred, (act_type_dist, act_param_dist), rnn_hxs
+
+
+class HybridMlpStateGaussianPolicy(ActorCriticPolicy):
+    def __init__(self, state_obs_dim, n_primitive, act_dim, hidden_dim) -> None:
+        super().__init__()
+        self.state_obs_dim = state_obs_dim
+        self.n_primitive = n_primitive
+        self.act_dim = act_dim
+        self.act_feature = nn.Sequential(
+            nn.Linear(state_obs_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+        )
+        self.act_type = nn.Linear(hidden_dim, n_primitive)
+        self.act_param = nn.Linear(hidden_dim, act_dim)
+        init_std = 1
+        self.log_std = nn.Parameter(torch.ones(act_dim) * np.log(init_std))
+        self.value_layers = nn.Sequential(
+            nn.Linear(state_obs_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+        self.is_recurrent = False
+        self.recurrent_hidden_state_size = 1
+        torch.nn.init.orthogonal_(self.act_type.weight, gain=0.01)
+        torch.nn.init.constant_(self.act_type.bias, 0.)
+        torch.nn.init.orthogonal_(self.act_param.weight, gain=0.01)
+        torch.nn.init.constant_(self.act_param.bias, 0.)
+        self.init_weights(self.value_layers, [np.sqrt(2), np.sqrt(2), 1.0])
+    
+    @staticmethod
+    def init_weights(sequential, scales):
+        [torch.nn.init.orthogonal_(module.weight, gain=scales[idx]) for idx, module in
+         enumerate(mod for mod in sequential if isinstance(mod, nn.Linear))]
+    
+    def forward(self, obs, rnn_hxs=None, rnn_masks=None):
+        actor_feature = self.act_feature(obs)
+        act_type_logits = self.act_type(actor_feature)
+        act_type_dist = Categorical(logits=act_type_logits)
+        act_param_mean = self.act_param(actor_feature)
+        act_param_dist = Normal(loc=act_param_mean, scale=torch.exp(self.log_std))
+        value_pred = self.value_layers(obs)
+        return value_pred, (act_type_dist, act_param_dist), rnn_hxs
+    
+    def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False):
+        value_pred, (act_type_dist, act_param_dist), rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks)
+        if deterministic:
+            act_type = act_type_dist.probs.argmax(dim=-1, keepdim=True)
+            act_params = act_param_dist.mean
+        else:
+            act_type = act_type_dist.sample().unsqueeze(dim=-1)
+            act_params = act_param_dist.sample()
+        act_type_logprob = act_type_dist.log_prob(act_type.squeeze(dim=-1)).unsqueeze(dim=-1)
+        act_params_logprob = act_param_dist.log_prob(act_params)
+        actions = torch.cat([act_type, act_params], dim=-1)
+        log_prob = act_type_logprob + act_params_logprob.sum(dim=-1, keepdim=True)
+        return value_pred, actions, log_prob, rnn_hxs
+    
+    def evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions):
+        _, (act_type_dist, act_param_dist), _ = self.forward(obs, rnn_hxs, rnn_masks)
+        act_type = actions[:, 0].int()
+        act_params = actions[:, 1:]
+        act_type_logprob = act_type_dist.log_prob(act_type).unsqueeze(dim=-1)
+        act_param_logprob = act_param_dist.log_prob(act_params)
+        log_prob = act_type_logprob + act_param_logprob.sum(dim=-1, keepdim=True)
+        act_type_ent = act_type_dist.entropy().unsqueeze(dim=-1)
+        act_param_ent = act_param_dist.entropy()
+        entropy = (act_type_ent + act_param_ent.sum(dim=-1, keepdim=True)).mean()
+        return log_prob, entropy, rnn_hxs
