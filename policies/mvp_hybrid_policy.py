@@ -129,18 +129,27 @@ class HybridMlpStatePolicy(HybridMlpPolicy):
         self.n_primitive = n_primitive
         self.act_dim = act_dim
         self.num_bin = num_bin
-        self.act_type = nn.Sequential(
+        self.act_feature = nn.Sequential(
             nn.Linear(state_obs_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, n_primitive),
+            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
         )
-        self.act_param = nn.ModuleList([nn.Sequential(
-            nn.Linear(state_obs_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, num_bin)
-        ) for _ in range(act_dim)])
+        # self.act_type = nn.Sequential(
+        #     nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+        #     nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+        #     # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+        #     nn.Linear(hidden_dim, n_primitive),
+        # )
+        self.act_type = nn.Linear(hidden_dim, n_primitive)
+        # self.act_param = nn.ModuleList([nn.Sequential(
+        #     nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+        #     nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+        #     # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+        #     nn.Linear(hidden_dim, num_bin)
+        # ) for _ in range(act_dim)])
+        self.act_param = nn.ModuleList([
+            nn.Linear(hidden_dim, num_bin) for _ in range(act_dim)
+        ])
         self.value_layers = nn.Sequential(
             nn.Linear(state_obs_dim, hidden_dim), nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
@@ -150,15 +159,18 @@ class HybridMlpStatePolicy(HybridMlpPolicy):
         self.is_recurrent = False
         self.recurrent_hidden_state_size = 1
         self.use_param_mask = False
-        self.init_weights(self.act_type, [np.sqrt(2), np.sqrt(2), 0.01])
+        torch.nn.init.orthogonal_(self.act_type.weight, gain=0.01)
+        torch.nn.init.constant_(self.act_type.bias, 0.)
         for i in range(act_dim):
-            self.init_weights(self.act_param[i], [np.sqrt(2), np.sqrt(2), 0.01])
+            torch.nn.init.orthogonal_(self.act_param[i].weight, gain=0.01)
+            torch.nn.init.constant_(self.act_param[i].bias, 0.)
         self.init_weights(self.value_layers, [np.sqrt(2), np.sqrt(2), 1.0])
 
     def forward(self, obs, rnn_hxs=None, rnn_masks=None):
-        act_type_logits = self.act_type(obs)
+        actor_feature = self.act_feature(obs)
+        act_type_logits = self.act_type(actor_feature)
         act_type_dist = Categorical(logits=act_type_logits)
-        act_param_logits = [self.act_param[i](obs) for i in range(len(self.act_param))]
+        act_param_logits = [self.act_param[i](actor_feature) for i in range(len(self.act_param))]
         act_param_dist = [Categorical(logits=act_param_logits[i]) for i in range(self.act_dim)]
         value_pred = self.value_layers(obs)
         return value_pred, (act_type_dist, act_param_dist), rnn_hxs
