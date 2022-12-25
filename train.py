@@ -31,6 +31,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if args.play:
         config["num_workers"] = 1
+        if config["env_id"] == "BulletDrawerState-v1":
+            config["create_env_kwargs"]["kwargs"]["render_goal"] = True
     import sys
     sys.path.append("../stacking_env")
     from bullet_envs.utils.make_vec_env import make_vec_env
