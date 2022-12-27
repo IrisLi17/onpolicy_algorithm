@@ -21,35 +21,36 @@ class HybridMlpPolicy(ActorCriticPolicy):
         self.num_bin = num_bin
         self.mvp_projector = nn.Linear(mvp_feat_dim, proj_img_dim)
         self.state_linear = nn.Linear(state_obs_dim, proj_state_dim)
+        self.value_mvp_projector = nn.Linear(mvp_feat_dim, proj_img_dim)
         if privilege_dim > 0:
-            self.privilege_state_linear = nn.Linear(state_obs_dim + privilege_dim, proj_state_dim)
+            self.value_state_linear = nn.Linear(state_obs_dim + privilege_dim, proj_state_dim)
         else:
-            self.privilege_state_linear = None
+            self.value_state_linear = nn.Linear(state_obs_dim, proj_state_dim)
         self.act_type = nn.Sequential(
-            nn.Linear(2 * proj_img_dim + proj_state_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, n_primitive),
+            nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
+            nn.Linear(256, 128), nn.SELU(),
+            nn.Linear(128, 64), nn.SELU(),
+            nn.Linear(64, n_primitive),
         )
         self.act_param = nn.ModuleList([nn.Sequential(
-            nn.Linear(2 * proj_img_dim + proj_state_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, num_bin)
+            nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
+            nn.Linear(256, 128), nn.SELU(),
+            nn.Linear(128, 64), nn.SELU(),
+            nn.Linear(64, num_bin)
         ) for _ in range(act_dim)])
         self.value_layers = nn.Sequential(
-            nn.Linear(2 * proj_img_dim + proj_state_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            # nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
+            nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
+            nn.Linear(256, 128), nn.SELU(),
+            nn.Linear(128, 64), nn.SELU(),
+            nn.Linear(64, 1)
         )
         self.is_recurrent = False
         self.recurrent_hidden_state_size = 1
         self.use_param_mask = False
-        # self.init_weights(self.act_type, [np.sqrt(2), np.sqrt(2), 0.01])
-        # for i in range(act_dim):
-        #     self.init_weights(self.act_param[i], [np.sqrt(2), np.sqrt(2), 0.01])
-        # self.init_weights(self.value_layers, [np.sqrt(2), np.sqrt(2), 1.0])
+        self.init_weights(self.act_type, [np.sqrt(2), np.sqrt(2), np.sqrt(2), 0.01])
+        for i in range(act_dim):
+            self.init_weights(self.act_param[i], [np.sqrt(2), np.sqrt(2), np.sqrt(2), 0.01])
+        self.init_weights(self.value_layers, [np.sqrt(2), np.sqrt(2), np.sqrt(2), 1.0])
     
     @staticmethod
     def init_weights(sequential, scales):
@@ -69,11 +70,13 @@ class HybridMlpPolicy(ActorCriticPolicy):
         proj_goal_feat = self.mvp_projector(goal_img_feat)
         proj_state_feat = self.state_linear(cur_state)
         proj_input = torch.cat([proj_cur_feat, proj_state_feat, proj_goal_feat], dim=-1)
-        if self.privilege_state_linear is not None:
-            proj_priv_state_feat = self.privilege_state_linear(torch.cat([cur_state, privilege_info], dim=-1))
-            proj_value_input = torch.cat([proj_cur_feat, proj_priv_state_feat, proj_goal_feat], dim=-1)
+        value_proj_cur_feat = self.value_mvp_projector(cur_img_feat)
+        value_proj_goal_feat = self.value_mvp_projector(goal_img_feat)
+        if self.privilege_dim > 0:
+            value_proj_state_feat = self.value_state_linear(torch.cat([cur_state, privilege_info], dim=-1))
         else:
-            proj_value_input = proj_input
+            value_proj_state_feat = self.value_state_linear(cur_state)
+        proj_value_input = torch.cat([value_proj_cur_feat, value_proj_state_feat, value_proj_goal_feat], dim=-1)
         act_type_logits = self.act_type(proj_input)
         act_type_dist = Categorical(logits=act_type_logits)
         act_param_logits = [self.act_param[i](proj_input) for i in range(len(self.act_param))]
@@ -190,7 +193,7 @@ class HybridMlpStateGaussianPolicy(ActorCriticPolicy):
         )
         self.act_type = nn.Linear(hidden_dim, n_primitive)
         self.act_param = nn.Linear(hidden_dim, act_dim)
-        init_std = 1
+        init_std = 0.1
         self.log_std = nn.Parameter(torch.ones(act_dim) * np.log(init_std))
         self.value_layers = nn.Sequential(
             nn.Linear(state_obs_dim, hidden_dim), nn.ReLU(),
@@ -244,3 +247,112 @@ class HybridMlpStateGaussianPolicy(ActorCriticPolicy):
         act_param_ent = act_param_dist.entropy()
         entropy = (act_type_ent + act_param_ent.sum(dim=-1, keepdim=True)).mean()
         return log_prob, entropy, rnn_hxs
+    
+    def get_bc_loss(self, obs, rnn_hxs, rnn_masks, actions):
+        _, (act_type_dist, act_param_dist), _ = self.forward(obs, rnn_hxs, rnn_masks)
+        act_type = actions[:, 0].int()
+        act_params = actions[:, 1:]
+        act_type_logprob = act_type_dist.log_prob(act_type)
+        act_params_error = torch.norm(act_param_dist.mean - act_params, 1, dim=-1)
+        loss = (-0.1 * act_type_logprob + act_params_error).mean()
+        return loss
+
+
+class HybridMlpGaussianPolicy(HybridMlpPolicy):
+    def __init__(
+        self, mvp_feat_dim, state_obs_dim, n_primitive, act_dim,
+        hidden_dim, proj_img_dim, proj_state_dim,
+        privilege_dim=0
+    ) -> None:
+        ActorCriticPolicy.__init__(self)
+        self.mvp_feat_dim = mvp_feat_dim
+        self.state_obs_dim = state_obs_dim
+        self.privilege_dim = privilege_dim
+        self.n_primitive = n_primitive
+        self.act_dim = act_dim
+        self.mvp_projector = nn.Linear(mvp_feat_dim, proj_img_dim)
+        self.state_linear = nn.Linear(state_obs_dim, proj_state_dim)
+        if privilege_dim > 0:
+            self.privilege_state_linear = nn.Linear(state_obs_dim + privilege_dim, proj_state_dim)
+        else:
+            self.privilege_state_linear = None
+        self.act_type = nn.Sequential(
+            nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
+            nn.Linear(256, 128), nn.SELU(),
+            nn.Linear(128, 64), nn.SELU(),
+            nn.Linear(64, n_primitive),
+        )
+        self.act_param = nn.Sequential(
+            nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
+            nn.Linear(256, 128), nn.SELU(),
+            nn.Linear(128, 64), nn.SELU(),
+            nn.Linear(64, act_dim)
+        )
+        init_std = 0.1
+        self.log_std = nn.Parameter(torch.ones(act_dim) * np.log(init_std))
+        self.value_layers = nn.Sequential(
+            nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
+            nn.Linear(256, 128), nn.SELU(),
+            nn.Linear(128, 64), nn.SELU(),
+            nn.Linear(64, 1)
+        )
+        self.is_recurrent = False
+        self.recurrent_hidden_state_size = 1
+        self.use_param_mask = False
+        self.init_weights(self.act_type, [np.sqrt(2), np.sqrt(2), np.sqrt(2), 0.01])
+        self.init_weights(self.act_param, [np.sqrt(2), np.sqrt(2), np.sqrt(2), 0.01])
+        self.init_weights(self.value_layers, [np.sqrt(2), np.sqrt(2), np.sqrt(2), 1.0])
+    
+    def forward(self, obs, rnn_hxs=None, rnn_masks=None):
+        cur_img_feat, cur_state, goal_img_feat, privilege_info = self._obs_parser(obs)
+        proj_cur_feat = self.mvp_projector(cur_img_feat)
+        proj_goal_feat = self.mvp_projector(goal_img_feat)
+        proj_state_feat = self.state_linear(cur_state)
+        proj_input = torch.cat([proj_cur_feat, proj_state_feat, proj_goal_feat], dim=-1)
+        if self.privilege_state_linear is not None:
+            proj_priv_state_feat = self.privilege_state_linear(torch.cat([cur_state, privilege_info], dim=-1))
+            proj_value_input = torch.cat([proj_cur_feat, proj_priv_state_feat, proj_goal_feat], dim=-1)
+        else:
+            proj_value_input = proj_input
+        act_type_logits = self.act_type(proj_input)
+        act_type_dist = Categorical(logits=act_type_logits)
+        act_param = self.act_param(proj_input)
+        act_param_dist = Normal(loc=act_param, scale=torch.exp(self.log_std))
+        value_pred = self.value_layers(proj_value_input)
+        return value_pred, (act_type_dist, act_param_dist), rnn_hxs
+    
+    def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False):
+        value_pred, (act_type_dist, act_param_dist), rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks)
+        if deterministic:
+            act_type = act_type_dist.probs.argmax(dim=-1, keepdim=True)
+            act_params = act_param_dist.mean
+        else:
+            act_type = act_type_dist.sample().unsqueeze(dim=-1)
+            act_params = act_param_dist.sample()
+        act_type_logprob = act_type_dist.log_prob(act_type.squeeze(dim=-1)).unsqueeze(dim=-1)
+        act_params_logprob = act_param_dist.log_prob(act_params)
+        actions = torch.cat([act_type, act_params], dim=-1)
+        log_prob = act_type_logprob + act_params_logprob.sum(dim=-1, keepdim=True)
+        return value_pred, actions, log_prob, rnn_hxs
+    
+    def evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions):
+        _, (act_type_dist, act_param_dist), _ = self.forward(obs, rnn_hxs, rnn_masks)
+        act_type = actions[:, 0].int()
+        act_params = actions[:, 1:]
+        act_type_logprob = act_type_dist.log_prob(act_type)
+        act_param_logprob = act_param_dist.log_prob(act_params)
+        # TODO: check shape
+        log_prob = act_type_logprob.unsqueeze(dim=-1) + act_param_logprob.sum(dim=-1, keepdim=True)
+        act_type_ent = act_type_dist.entropy()
+        act_param_ent = act_param_dist.entropy().sum(dim=-1)
+        entropy = (act_type_ent + act_param_ent).mean()
+        return log_prob, entropy, rnn_hxs
+    
+    def get_bc_loss(self, obs, rnn_hxs, rnn_masks, actions):
+        _, (act_type_dist, act_param_dist), _ = self.forward(obs, rnn_hxs, rnn_masks)
+        act_type = actions[:, 0].int()
+        act_params = actions[:, 1:]
+        act_type_logprob = act_type_dist.log_prob(act_type)
+        act_params_error = torch.norm(act_param_dist.mean - act_params, 1, dim=-1)
+        loss = (-act_type_logprob + act_params_error).mean()
+        return loss

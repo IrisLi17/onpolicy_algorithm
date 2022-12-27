@@ -10,12 +10,13 @@ import numpy as np
 from typing import List, Dict
 import pickle
 import wandb
+import os
 
 
 class PPO(object):
     def __init__(self, env, policy: nn.Module, device="cpu", n_steps=1024, nminibatches=32, noptepochs=10, gamma=0.99,
                  lam=0.95, learning_rate=2.5e-4, cliprange=0.2, ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, eps=1e-5,
-                 use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False, use_wandb=False):
+                 use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False, use_wandb=False, warmup_dataset:dict=None):
         self.env = env
         self.policy = policy
         self.device = device
@@ -33,6 +34,7 @@ class PPO(object):
         self.use_clipped_value_loss = use_clipped_value_loss
         self.use_linear_lr_decay = use_linear_lr_decay
         self.use_wandb = use_wandb
+        self.warmup_dataset = warmup_dataset
 
         # if isinstance(self.env, VecEnv):
         #     self.n_envs = self.env.num_envs
@@ -50,6 +52,8 @@ class PPO(object):
         self.env_id = self.env.get_attr("spec")[0].id
 
     def learn(self, total_timesteps, callback=None):
+        if self.warmup_dataset is not None:
+            self.il_warmup(self.warmup_dataset)
         episode_rewards = deque(maxlen=1000)
         ep_infos = deque(maxlen=1000)
         obs = self.env.reset()
@@ -143,6 +147,69 @@ class PPO(object):
                 for loss_name in losses.keys():
                     log_data[loss_name] = losses[loss_name]
                 wandb.log(log_data, step=self.num_timesteps)
+
+    def il_warmup(self, dataset):
+        dataset["obs"] = torch.from_numpy(dataset["obs"]).float().to(self.device)
+        dataset["action"] = torch.from_numpy(dataset["action"]).float().to(self.device)
+        num_sample = dataset["obs"].shape[0]
+        indices = np.arange(num_sample)
+        n_epoch = 15
+        batch_size = 128
+        eval_interval = 10
+        losses = dict(policy_loss=deque(maxlen=50), grad_norm=deque(maxlen=50), 
+                      param_norm=deque(maxlen=50),
+                      action_param_error=deque(maxlen=50), action_type_error=deque(maxlen=50))
+        # TODO: remove logstd from parameter list
+        optimizer = optim.Adam([p[1] for p in self.policy.named_parameters() if not "log_std" in p[0]], lr=1e-3, weight_decay=0.0)
+        self.save(os.path.join(logger.get_dir(), "model_init.pt"))
+        from utils.evaluation import evaluate_fixed_states
+        success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)
+        print("Initial success episode: drawer %d / %d, object %d / %d" % (success_episodes[0], total_episodes[0], success_episodes[1], total_episodes[1]))
+        for i in range(n_epoch):
+            np.random.shuffle(indices)
+            for j in range(num_sample // batch_size):
+                mb_idx = indices[batch_size * j: batch_size * (j + 1)]
+                obs_batch = dataset["obs"][mb_idx]
+                actions_batch = dataset["action"][mb_idx]
+                recurrent_hidden_states_batch = torch.zeros((obs_batch.shape[0], 1))
+                masks_batch = torch.ones((obs_batch.shape[0], 1))
+                # action_log_probs, dist_entropy, _ = self.policy.evaluate_actions(
+                #     obs_batch, recurrent_hidden_states_batch, masks_batch,
+                #     actions_batch)
+                # loss = -action_log_probs.mean()
+                loss = self.policy.get_bc_loss(obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch)
+                self.optimizer.zero_grad()
+                loss.backward()
+                grads = [p.grad for p in self.policy.parameters() if p.grad is not None]
+                device = grads[0].device
+                total_norm = torch.norm(torch.stack([torch.norm(g.detach(), 2).to(device) for g in grads]), 2)
+                optimizer.step()
+                with torch.no_grad():
+                    _, pred_actions, pred_logprob, _ = self.policy.act(obs_batch, deterministic=True)
+                    action_param_error = torch.norm(pred_actions[:, 1:] - actions_batch[:, 1:], 1, dim=-1).mean()
+                    action_type_error = torch.norm(pred_actions[:, 0: 1] - actions_batch[:, 0: 1], 0, dim=-1).mean()
+                    if j == 0:
+                        print("pred action", pred_actions[0], "gt action", actions_batch[0])
+                losses["action_param_error"].append(action_param_error.item())
+                losses["action_type_error"].append(action_type_error.item())
+                losses["param_norm"].append(
+                    torch.norm(torch.stack([torch.norm(p.detach()) for p in self.policy.parameters()])).item()
+                )
+                # for name, p in self.policy.named_parameters():
+                #     if not name in losses:
+                #         losses[name] = deque(maxlen=50)
+                #     losses[name].append(torch.norm(p.detach()).item())
+                losses["policy_loss"].append(loss.item())
+                losses["grad_norm"].append(total_norm.item())
+            if i % eval_interval == 0 or i == n_epoch - 1:
+                success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)
+                print("Success episode: drawer %d / %d, object %d / %d" % (success_episodes[0], total_episodes[0], success_episodes[1], total_episodes[1]))
+                self.save(os.path.join(logger.get_dir(), "model_init%d.pt" % i))
+            logger.logkv("epoch", i)
+            for k in losses:
+                # print(k, np.mean(losses[k]))
+                logger.logkv(k, np.mean(losses[k]))
+            logger.dump_tabular()
 
     def update(self):
         advantages = self.rollouts.returns[:-1] - self.rollouts.value_preds[:-1]

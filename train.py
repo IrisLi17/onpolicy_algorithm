@@ -47,6 +47,12 @@ def main():
     else:
         policy = HybridMlpPolicy(**config["policy"])
     policy.to(device)
+    if config.get("warmup_dataset") is not None:
+        import pickle
+        with open(config["warmup_dataset"], "rb") as f:
+            dataset = pickle.load(f)
+        config["train"]["warmup_dataset"] = dataset
+    
     if config["algo"] == "ppo":
         from onpolicy import PPO
         model = PPO(env, policy, device, **config.get("train", {}))

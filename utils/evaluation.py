@@ -26,7 +26,7 @@ def evaluate(env, policy, n_episode):
         # plt.imsave("tmp/tmp%d.png" % frame_count, img)
         # plt.pause(0.01)
         with torch.no_grad():
-            _, actions, _, _ = policy.act(obs, deterministic=True)
+            _, actions, _, _ = policy.act(obs, deterministic=False)
         # if frame_count == reset_step:
         #     print("action at reset step", actions)
         obs, reward, done, info = env.step(actions)
@@ -51,12 +51,15 @@ def evaluate_fixed_states(env, policy, device, initial_states, goals, n_episode=
     if initial_states is not None:
         n_episode = len(initial_states)
     env_id = env.get_attr("spec")[0].id
-    env.reset()
+    obs = env.reset()
     evaluated_episode = 0
     n_used_state = 0
     if env_id == "BulletStack-v1":
         total_episode = [0] * env.get_attr("n_object")[0]
         success_episode = [0] * env.get_attr("n_object")[0]
+    elif env_id == "BulletDrawer-v1" or env_id == "BulletDrawerState-v1":
+        total_episode = [0, 0]
+        success_episode = [0, 0]
     else:
         total_episode, success_episode = 0, 0
     valid_mask = [True] * env.num_envs
@@ -70,7 +73,7 @@ def evaluate_fixed_states(env, policy, device, initial_states, goals, n_episode=
                 n_used_state += 1
             else:
                 valid_mask[i] = False
-    obs = env.get_obs()
+        obs = env.get_obs()
     recurrent_mask = torch.ones(env.num_envs, 1, device=device)
     while evaluated_episode < n_episode:
         with torch.no_grad():
@@ -84,6 +87,13 @@ def evaluate_fixed_states(env, policy, device, initial_states, goals, n_episode=
                     if env_id == "BulletStack-v1":
                         total_episode[infos[e_idx]["n_to_stack"] - 1] += 1
                         success_episode[infos[e_idx]["n_to_stack"] - 1] += infos[e_idx]["is_success"]
+                    elif env_id == "BulletDrawer-v1" or env_id == "BulletDrawerState-v1":
+                        if infos[e_idx]["is_goal_move_drawer"]:
+                            total_episode[0] += 1
+                            success_episode[0] += infos[e_idx]["is_success"]
+                        else:
+                            total_episode[1] += 1
+                            success_episode[1] += infos[e_idx]["is_success"]
                     else:
                         total_episode += 1
                         success_episode += infos[e_idx]["is_success"]
