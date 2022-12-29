@@ -1,13 +1,14 @@
 from policies.mvp_hybrid_policy import HybridMlpStateGaussianPolicy
+obj_task_ratio = 0.7
 config = dict(
     env_id="BulletDrawerState-v1",
     num_workers=64,
     algo="ppo",
-    name="debug_h20_sparsecont_obj1_newsuccess_nojoint",
+    name="debug_h20_sparsecont_obj%.01f_newsuccess_nojoint" % obj_task_ratio,
     # log_dir="logs/BulletDrawer-v1/test",
     total_timesteps=int(5e7),
     create_env_kwargs=dict(
-        kwargs=dict(reward_type="sparse", use_gpu_render=False, obj_task_ratio=1.0),
+        kwargs=dict(reward_type="sparse", use_gpu_render=False, obj_task_ratio=obj_task_ratio),
     ),
     policy_class=HybridMlpStateGaussianPolicy,
     policy=dict(
@@ -22,6 +23,6 @@ config = dict(
         n_steps=1024,
         gamma=0.95,
     ),
-    warmup_dataset="../stacking_env/warmup_dataset.pkl",
+    warmup_dataset="../stacking_env/warmup_dataset_state_obj%.01f.pkl" % obj_task_ratio,
     save_interval=20,
 )

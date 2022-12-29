@@ -276,17 +276,18 @@ class HybridMlpGaussianPolicy(HybridMlpPolicy):
             self.privilege_state_linear = nn.Linear(state_obs_dim + privilege_dim, proj_state_dim)
         else:
             self.privilege_state_linear = None
-        self.act_type = nn.Sequential(
+        self.value_mvp_projector = nn.Linear(mvp_feat_dim, proj_img_dim)
+        self.value_state_linear = nn.Linear(state_obs_dim, proj_state_dim)
+        self.act_feature = nn.Sequential(
             nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
-            nn.Linear(256, 128), nn.SELU(),
-            nn.Linear(128, 64), nn.SELU(),
-            nn.Linear(64, n_primitive),
+            nn.Linear(256, 256), nn.SELU(),
+            nn.Linear(256, 256), nn.SELU()
+        )
+        self.act_type = nn.Sequential(
+            nn.Linear(256, n_primitive)
         )
         self.act_param = nn.Sequential(
-            nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
-            nn.Linear(256, 128), nn.SELU(),
-            nn.Linear(128, 64), nn.SELU(),
-            nn.Linear(64, act_dim)
+            nn.Linear(256, act_dim)
         )
         init_std = 0.1
         self.log_std = nn.Parameter(torch.ones(act_dim) * np.log(init_std))
@@ -299,8 +300,8 @@ class HybridMlpGaussianPolicy(HybridMlpPolicy):
         self.is_recurrent = False
         self.recurrent_hidden_state_size = 1
         self.use_param_mask = False
-        self.init_weights(self.act_type, [np.sqrt(2), np.sqrt(2), np.sqrt(2), 0.01])
-        self.init_weights(self.act_param, [np.sqrt(2), np.sqrt(2), np.sqrt(2), 0.01])
+        self.init_weights(self.act_type, [0.01])
+        self.init_weights(self.act_param, [0.01])
         self.init_weights(self.value_layers, [np.sqrt(2), np.sqrt(2), np.sqrt(2), 1.0])
     
     def forward(self, obs, rnn_hxs=None, rnn_masks=None):
@@ -309,14 +310,17 @@ class HybridMlpGaussianPolicy(HybridMlpPolicy):
         proj_goal_feat = self.mvp_projector(goal_img_feat)
         proj_state_feat = self.state_linear(cur_state)
         proj_input = torch.cat([proj_cur_feat, proj_state_feat, proj_goal_feat], dim=-1)
+        value_proj_cur_feat = self.value_mvp_projector(cur_img_feat)
+        value_proj_goal_feat = self.value_mvp_projector(goal_img_feat)
         if self.privilege_state_linear is not None:
-            proj_priv_state_feat = self.privilege_state_linear(torch.cat([cur_state, privilege_info], dim=-1))
-            proj_value_input = torch.cat([proj_cur_feat, proj_priv_state_feat, proj_goal_feat], dim=-1)
+            value_proj_state_feat = self.privilege_state_linear(torch.cat([cur_state, privilege_info], dim=-1))
         else:
-            proj_value_input = proj_input
-        act_type_logits = self.act_type(proj_input)
+            value_proj_state_feat = self.value_state_linear(cur_state)
+        proj_value_input = torch.cat([value_proj_cur_feat, value_proj_state_feat, value_proj_goal_feat], dim=-1)
+        act_input = self.act_feature(proj_input)
+        act_type_logits = self.act_type(act_input)
         act_type_dist = Categorical(logits=act_type_logits)
-        act_param = self.act_param(proj_input)
+        act_param = self.act_param(act_input)
         act_param_dist = Normal(loc=act_param, scale=torch.exp(self.log_std))
         value_pred = self.value_layers(proj_value_input)
         return value_pred, (act_type_dist, act_param_dist), rnn_hxs
@@ -354,5 +358,5 @@ class HybridMlpGaussianPolicy(HybridMlpPolicy):
         act_params = actions[:, 1:]
         act_type_logprob = act_type_dist.log_prob(act_type)
         act_params_error = torch.norm(act_param_dist.mean - act_params, 1, dim=-1)
-        loss = (-act_type_logprob + act_params_error).mean()
+        loss = (-0.1 * act_type_logprob + act_params_error).mean()
         return loss

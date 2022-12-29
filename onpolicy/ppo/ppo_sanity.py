@@ -153,7 +153,8 @@ class PPO(object):
         dataset["action"] = torch.from_numpy(dataset["action"]).float().to(self.device)
         num_sample = dataset["obs"].shape[0]
         indices = np.arange(num_sample)
-        n_epoch = 15
+        # n_epoch = 15
+        n_epoch = 30
         batch_size = 128
         eval_interval = 10
         losses = dict(policy_loss=deque(maxlen=50), grad_norm=deque(maxlen=50), 
