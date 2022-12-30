@@ -47,7 +47,7 @@ def main():
     else:
         policy = HybridMlpPolicy(**config["policy"])
     policy.to(device)
-    if config.get("warmup_dataset") is not None:
+    if (not args.play) and config.get("warmup_dataset") is not None:
         import pickle
         with open(config["warmup_dataset"], "rb") as f:
             dataset = pickle.load(f)

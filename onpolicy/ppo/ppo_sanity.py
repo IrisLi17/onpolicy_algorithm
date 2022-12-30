@@ -148,21 +148,41 @@ class PPO(object):
                     log_data[loss_name] = losses[loss_name]
                 wandb.log(log_data, step=self.num_timesteps)
 
-    def il_warmup(self, dataset):
+    def il_warmup(self, dataset, train_value=False):
         dataset["obs"] = torch.from_numpy(dataset["obs"]).float().to(self.device)
         dataset["action"] = torch.from_numpy(dataset["action"]).float().to(self.device)
         num_sample = dataset["obs"].shape[0]
         indices = np.arange(num_sample)
+        n_value_epoch = 5
         # n_epoch = 15
         n_epoch = 30
         batch_size = 128
         eval_interval = 10
         losses = dict(policy_loss=deque(maxlen=50), grad_norm=deque(maxlen=50), 
-                      param_norm=deque(maxlen=50),
+                      param_norm=deque(maxlen=50), value_loss=deque(maxlen=50),
                       action_param_error=deque(maxlen=50), action_type_error=deque(maxlen=50))
-        # TODO: remove logstd from parameter list
         optimizer = optim.Adam([p[1] for p in self.policy.named_parameters() if not "log_std" in p[0]], lr=1e-3, weight_decay=0.0)
         self.save(os.path.join(logger.get_dir(), "model_init.pt"))
+        
+        if train_value:
+            target_returns = torch.from_numpy(self.compute_discounted_reward(dataset["boundary"] + [dataset["obs"].shape[0]])).unsqueeze(dim=-1).float().to(self.device)
+            # TODO: get negative samples?
+            for i in range(n_value_epoch):
+                np.random.shuffle(indices)
+                for j in range(num_sample // batch_size):
+                    mb_idx = indices[batch_size * j: batch_size * (j + 1)]
+                    obs_batch = dataset["obs"][mb_idx]
+                    return_batch = target_returns[mb_idx]
+                    recurrent_hidden_states_batch = torch.zeros((obs_batch.shape[0], 1))
+                    masks_batch = torch.ones((obs_batch.shape[0], 1))
+                    pred_value = self.policy.get_value(obs_batch, recurrent_hidden_states_batch, masks_batch)
+                    loss = torch.mean((pred_value - return_batch) ** 2)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    losses["value_loss"].append(loss.item())
+                print("Value epoch", i, "Value loss", np.mean(losses["value_loss"]))
+                
         from utils.evaluation import evaluate_fixed_states
         success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)
         print("Initial success episode: drawer %d / %d, object %d / %d" % (success_episodes[0], total_episodes[0], success_episodes[1], total_episodes[1]))
@@ -179,7 +199,7 @@ class PPO(object):
                 #     actions_batch)
                 # loss = -action_log_probs.mean()
                 loss = self.policy.get_bc_loss(obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch)
-                self.optimizer.zero_grad()
+                optimizer.zero_grad()
                 loss.backward()
                 grads = [p.grad for p in self.policy.parameters() if p.grad is not None]
                 device = grads[0].device
@@ -212,6 +232,15 @@ class PPO(object):
                 logger.logkv(k, np.mean(losses[k]))
             logger.dump_tabular()
 
+    def compute_discounted_reward(self, boundary: list):
+        returns = []
+        for i in range(1, len(boundary)):
+            ep_return = np.power(self.gamma, np.arange(boundary[i] - boundary[i - 1] - 1, -1, -1))
+            returns.append(ep_return)
+        returns = np.concatenate(returns)
+        assert len(returns) == boundary[-1]
+        return returns
+    
     def update(self):
         advantages = self.rollouts.returns[:-1] - self.rollouts.value_preds[:-1]
         adv_mean, adv_std = advantages.mean(), advantages.std()
