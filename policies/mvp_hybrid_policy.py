@@ -26,17 +26,16 @@ class HybridMlpPolicy(ActorCriticPolicy):
             self.value_state_linear = nn.Linear(state_obs_dim + privilege_dim, proj_state_dim)
         else:
             self.value_state_linear = nn.Linear(state_obs_dim, proj_state_dim)
-        self.act_type = nn.Sequential(
+        self.act_feature = nn.Sequential(
             nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
-            nn.Linear(256, 128), nn.SELU(),
-            nn.Linear(128, 64), nn.SELU(),
-            nn.Linear(64, n_primitive),
+            nn.Linear(256, 256), nn.SELU(),
+            nn.Linear(256, 256), nn.SELU()
+        )
+        self.act_type = nn.Sequential(
+            nn.Linear(256, n_primitive)
         )
         self.act_param = nn.ModuleList([nn.Sequential(
-            nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
-            nn.Linear(256, 128), nn.SELU(),
-            nn.Linear(128, 64), nn.SELU(),
-            nn.Linear(64, num_bin)
+            nn.Linear(256, num_bin)
         ) for _ in range(act_dim)])
         self.value_layers = nn.Sequential(
             nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
@@ -47,9 +46,9 @@ class HybridMlpPolicy(ActorCriticPolicy):
         self.is_recurrent = False
         self.recurrent_hidden_state_size = 1
         self.use_param_mask = False
-        self.init_weights(self.act_type, [np.sqrt(2), np.sqrt(2), np.sqrt(2), 0.01])
+        self.init_weights(self.act_type, [0.01])
         for i in range(act_dim):
-            self.init_weights(self.act_param[i], [np.sqrt(2), np.sqrt(2), np.sqrt(2), 0.01])
+            self.init_weights(self.act_param[i], [0.01])
         self.init_weights(self.value_layers, [np.sqrt(2), np.sqrt(2), np.sqrt(2), 1.0])
     
     @staticmethod
@@ -70,6 +69,7 @@ class HybridMlpPolicy(ActorCriticPolicy):
         proj_goal_feat = self.mvp_projector(goal_img_feat)
         proj_state_feat = self.state_linear(cur_state)
         proj_input = torch.cat([proj_cur_feat, proj_state_feat, proj_goal_feat], dim=-1)
+        proj_input = self.act_feature(proj_input)
         value_proj_cur_feat = self.value_mvp_projector(cur_img_feat)
         value_proj_goal_feat = self.value_mvp_projector(goal_img_feat)
         if self.privilege_dim > 0:
@@ -127,6 +127,7 @@ class HybridMlpPolicy(ActorCriticPolicy):
     
     def get_bc_loss(self, obs, rnn_hxs, rnn_masks, actions):
         log_prob, _, _ = self.evaluate_actions(obs, rnn_hxs, rnn_masks, actions)
+        # TODO: do we need clip
         loss = -log_prob.mean()
         return loss
 
