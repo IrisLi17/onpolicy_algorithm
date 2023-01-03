@@ -10,7 +10,7 @@ class HybridMlpPolicy(ActorCriticPolicy):
     def __init__(
         self, mvp_feat_dim, state_obs_dim, n_primitive, act_dim, num_bin,
         hidden_dim, proj_img_dim, proj_state_dim,
-        privilege_dim=0
+        privilege_dim=0, state_only_value=False,
     ) -> None:
         super().__init__()
         self.mvp_feat_dim = mvp_feat_dim
@@ -21,11 +21,16 @@ class HybridMlpPolicy(ActorCriticPolicy):
         self.num_bin = num_bin
         self.mvp_projector = nn.Linear(mvp_feat_dim, proj_img_dim)
         self.state_linear = nn.Linear(state_obs_dim, proj_state_dim)
-        self.value_mvp_projector = nn.Linear(mvp_feat_dim, proj_img_dim)
-        if privilege_dim > 0:
-            self.value_state_linear = nn.Linear(state_obs_dim + privilege_dim, proj_state_dim)
+        if not state_only_value:
+            self.value_mvp_projector = nn.Linear(mvp_feat_dim, proj_img_dim)
+            if privilege_dim > 0:
+                self.value_state_linear = nn.Linear(state_obs_dim + privilege_dim, proj_state_dim)
+            else:
+                self.value_state_linear = nn.Linear(state_obs_dim, proj_state_dim)
         else:
-            self.value_state_linear = nn.Linear(state_obs_dim, proj_state_dim)
+            assert privilege_dim > 0
+            self.value_mvp_projector = None
+            self.value_state_linear = None
         self.act_feature = nn.Sequential(
             nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
             nn.Linear(256, 256), nn.SELU(),
@@ -37,12 +42,20 @@ class HybridMlpPolicy(ActorCriticPolicy):
         self.act_param = nn.ModuleList([nn.Sequential(
             nn.Linear(256, num_bin)
         ) for _ in range(act_dim)])
-        self.value_layers = nn.Sequential(
-            nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
-            nn.Linear(256, 128), nn.SELU(),
-            nn.Linear(128, 64), nn.SELU(),
-            nn.Linear(64, 1)
-        )
+        if not state_only_value:
+            self.value_layers = nn.Sequential(
+                nn.Linear(2 * proj_img_dim + proj_state_dim, 256), nn.SELU(),
+                nn.Linear(256, 128), nn.SELU(),
+                nn.Linear(128, 64), nn.SELU(),
+                nn.Linear(64, 1)
+            )
+        else:
+            self.value_layers = nn.Sequential(
+                nn.Linear(state_obs_dim + privilege_dim, 256), nn.SELU(),
+                nn.Linear(256, 128), nn.SELU(),
+                nn.Linear(128, 64), nn.SELU(),
+                nn.Linear(64, 1)
+            )
         self.is_recurrent = False
         self.recurrent_hidden_state_size = 1
         self.use_param_mask = False
@@ -70,13 +83,16 @@ class HybridMlpPolicy(ActorCriticPolicy):
         proj_state_feat = self.state_linear(cur_state)
         proj_input = torch.cat([proj_cur_feat, proj_state_feat, proj_goal_feat], dim=-1)
         proj_input = self.act_feature(proj_input)
-        value_proj_cur_feat = self.value_mvp_projector(cur_img_feat)
-        value_proj_goal_feat = self.value_mvp_projector(goal_img_feat)
-        if self.privilege_dim > 0:
-            value_proj_state_feat = self.value_state_linear(torch.cat([cur_state, privilege_info], dim=-1))
+        if self.value_mvp_projector is not None:
+            value_proj_cur_feat = self.value_mvp_projector(cur_img_feat)
+            value_proj_goal_feat = self.value_mvp_projector(goal_img_feat)
+            if self.privilege_dim > 0:
+                value_proj_state_feat = self.value_state_linear(torch.cat([cur_state, privilege_info], dim=-1))
+            else:
+                value_proj_state_feat = self.value_state_linear(cur_state)
+            proj_value_input = torch.cat([value_proj_cur_feat, value_proj_state_feat, value_proj_goal_feat], dim=-1)
         else:
-            value_proj_state_feat = self.value_state_linear(cur_state)
-        proj_value_input = torch.cat([value_proj_cur_feat, value_proj_state_feat, value_proj_goal_feat], dim=-1)
+            proj_value_input = torch.cat([cur_state, privilege_info], dim=-1)
         act_type_logits = self.act_type(proj_input)
         act_type_dist = Categorical(logits=act_type_logits)
         act_param_logits = [self.act_param[i](proj_input) for i in range(len(self.act_param))]
