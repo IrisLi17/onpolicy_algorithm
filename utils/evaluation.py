@@ -33,13 +33,13 @@ def evaluate(env, policy, n_episode):
         episode_reward += reward[0]
         episode_length += 1
         frame_count += 1
-        print("action", actions[0], "info", info[0]["handle_joint"])
+        # print("action", actions[0], "info", info[0]["handle_joint"])
         if hasattr(env, "obs_rms"):
             assert np.linalg.norm(env.obs_rms.mean - init_obs_mean) < 1e-5
             assert np.linalg.norm(env.obs_rms.var - init_obs_std) < 1e-5
         if done[0]:
             print("episode reward", episode_reward, "episode length", episode_length)
-            print("goal", env.get_attr("goal")[0]["state"])
+            # print("goal", env.get_attr("goal")[0]["state"])
             episode_count += 1
             episode_reward = 0
             episode_length = 0

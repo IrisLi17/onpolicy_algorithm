@@ -77,7 +77,7 @@ def main():
     else:
         model.load(args.load_path, eval=True)
         from utils.evaluation import evaluate
-        evaluate(env, policy, 10)
+        evaluate(env, policy, 20)
 
 
 if __name__ == "__main__":
