@@ -154,8 +154,7 @@ class PPO(object):
         num_sample = dataset["obs"].shape[0]
         indices = np.arange(num_sample)
         n_value_epoch = 5
-        # n_epoch = 15
-        n_epoch = 30
+        n_epoch = 15
         batch_size = 128
         eval_interval = 10
         losses = dict(policy_loss=deque(maxlen=50), grad_norm=deque(maxlen=50), 
@@ -166,7 +165,11 @@ class PPO(object):
         
         if train_value:
             target_returns = torch.from_numpy(self.compute_discounted_reward(dataset["boundary"] + [dataset["obs"].shape[0]])).unsqueeze(dim=-1).float().to(self.device)
-            # TODO: get negative samples?
+            # TODO: get negative samples? cross sample the goals
+            original_goal_img = dataset["terminate_obs"][:, 768 + 14: 768 * 2 + 14]
+            original_goal_info = torch.cat([dataset["terminate_obs"][:, -7: -6], dataset["terminate"][:, -3:]], dim=-1)
+            # shuffled_idx = 
+            
             for i in range(n_value_epoch):
                 np.random.shuffle(indices)
                 for j in range(num_sample // batch_size):

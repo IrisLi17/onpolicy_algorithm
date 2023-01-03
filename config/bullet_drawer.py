@@ -1,15 +1,17 @@
 from policies.mvp_hybrid_policy import HybridMlpPolicy
 obj_task_ratio = 0.7
-view_mode = "ego"
+view_mode = "third"
+noisy_img = False
 config = dict(
     env_id="BulletDrawer-v1",
     num_workers=64,
     algo="ppo",
-    name="debug_discrete_ile15b64",
+    name="discrete_%s_ile15b128%s" % (view_mode, "_noisy" if noisy_img else ""),
     # log_dir="logs/BulletDrawer-v1/test",
     total_timesteps=int(5e7),
     create_env_kwargs=dict(
-        kwargs=dict(reward_type="sparse", view_mode=view_mode, obj_task_ratio=obj_task_ratio),
+        kwargs=dict(reward_type="sparse", view_mode=view_mode, obj_task_ratio=obj_task_ratio,
+                    shift_params=(-5, 5) if noisy_img else (0, 0)),
     ),
     policy_class=HybridMlpPolicy,
     policy=dict(
@@ -28,6 +30,7 @@ config = dict(
         n_steps=1024,
         gamma=0.95,
     ),
-    warmup_dataset="../stacking_env/warmup_dataset_%s_obj%.01f.pkl" % (view_mode, obj_task_ratio),
+    warmup_dataset="../stacking_env/warmup_dataset_%s_obj%.01f%s.pkl" % (
+        view_mode, obj_task_ratio, "_noisy" if noisy_img else ""),
     save_interval=20,
 )

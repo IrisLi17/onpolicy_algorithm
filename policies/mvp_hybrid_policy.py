@@ -126,6 +126,7 @@ class HybridMlpPolicy(ActorCriticPolicy):
         return log_prob, entropy, rnn_hxs
     
     def get_bc_loss(self, obs, rnn_hxs, rnn_masks, actions):
+        actions[:, 1:] = torch.clamp(actions[:, 1:], -1., 1.)
         log_prob, _, _ = self.evaluate_actions(obs, rnn_hxs, rnn_masks, actions)
         # TODO: do we need clip
         loss = -log_prob.mean()
