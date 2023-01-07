@@ -5,16 +5,19 @@ import pickle
 
 
 class OfflineExpansion(object):
-    def __init__(self, rollout: RolloutStorage, env, value_op) -> None:
+    def __init__(self, rollout: RolloutStorage, env, policy) -> None:
         self.rollout = rollout
-        self.value_op = value_op
+        self.policy = policy
+        self.value_op = policy.get_value
         self.env = env
     
     def expand(self):
         initial_obs, end_obs, all_initial_idx, all_end_idx = self.parse_dataset()
         n_original = end_obs.shape[0]
+        # TODO: new goals should not only come from achieved end obs, they can from any achieved obs. 
+        # In this way the agent can potentially discover something new.
         # Create more. 
-        multiplier = 50
+        multiplier = 20
         _idx = np.random.choice(end_obs.shape[0], multiplier * end_obs.shape[0])
         sampled_end_obs = end_obs[_idx]
         initial_obs = initial_obs.repeat(multiplier, 1)
@@ -28,12 +31,29 @@ class OfflineExpansion(object):
         # interm_value_clip = torch.clamp(interm_value, 1e-6, 1.).squeeze(dim=-1)
         # TODO: value may not be good. try state-only value function or value ensemble
         metric = interm_value - initial_value
+        print("Sampled goal", metric.shape[0])
         # Get the top 2/multiplier goals
         goal_idx = torch.where(metric > torch.quantile(metric, 1.0 - 1.0 / multiplier))[0]
+        # TODO: For debugging only, oracle goal selection
+        goal_idx = torch.where(
+            torch.logical_or(
+                (relabel_interm_obs[:, -8] - relabel_interm_obs[:, -7]).abs() < 0.02,
+                torch.norm(relabel_interm_obs[:, -6:-3] - relabel_interm_obs[:, -3:]) < 0.04
+            )
+        )[0]
+        # Verify the second half in environment
+        second_half = self.roll_out(relabel_interm_obs[goal_idx], interm_value[goal_idx])
+        valid_goal_idx = torch.tensor([goal_idx[item["task_idx"]] for item in second_half])
+        print("proposed and valid goal", goal_idx.shape, valid_goal_idx.shape)
+        # Get full imitation traj
+        # TODO: keep some original successful data
         # Get imitation dataset
-        im_dataset = dict(obs=[], action=[], boundary=[], original_obs=[], initial_value=[], interm_value=[])
+        im_dataset = dict(obs=[], action=[], boundary=[], original_obs=[], 
+                          initial_value=[], interm_value=[], terminate_obs=[])
         im_count = 0
-        for g_idx in goal_idx:
+        for i in range(len(second_half)):
+            second_traj = second_half[i]
+            g_idx = valid_goal_idx[i]
             # in original idx
             original_idx = g_idx % n_original
             traj_initial_idx = all_initial_idx[original_idx]
@@ -43,10 +63,18 @@ class OfflineExpansion(object):
             new_goal = (item[g_idx] for item in sampled_achieved)
             # inclusive
             traj_obs = self.rollout.obs[traj_initial_idx[0]: traj_end_idx[0] + 1, traj_initial_idx[1]]
-            im_traj_obs = self.relabel(traj_obs, new_goal)
-            im_traj_action = self.rollout.actions[traj_initial_idx[0]: traj_end_idx[0] + 1, traj_initial_idx[1]]
-            im_dataset["obs"].append(im_traj_obs.detach().cpu().numpy())
-            im_dataset["action"].append(im_traj_action.detach().cpu().numpy())
+            im_traj1_obs = self.relabel(traj_obs, new_goal)
+            im_traj1_action = self.rollout.actions[traj_initial_idx[0]: traj_end_idx[0] + 1, traj_initial_idx[1]]
+            im_traj2_obs = second_traj["obs"]
+            im_traj_obs = np.concatenate(
+                [im_traj1_obs.detach().cpu().numpy(), im_traj2_obs[:-1]], axis=0
+            )
+            im_traj_action = np.concatenate(
+                [im_traj1_action.detach().cpu().numpy(), second_traj["action"]], axis=0
+            )
+            im_dataset["obs"].append(im_traj_obs)
+            im_dataset["action"].append(im_traj_action)
+            im_dataset["terminate_obs"].append(im_traj2_obs[-1])
             im_dataset["boundary"].append(im_count)
             im_dataset["original_obs"].append(traj_obs.detach().cpu().numpy())
             im_dataset["initial_value"].append(initial_value[g_idx, 0].item())
@@ -65,7 +93,7 @@ class OfflineExpansion(object):
         generated_obs = relabel_initial_obs[goal_idx]
         # Convert to states that can pass into the environment
         reset_env_states = self.obs_to_env_states(generated_obs)            
-        return reset_env_states
+        return im_dataset, reset_env_states
         
     def parse_dataset(self):
         num_processes = self.rollout.obs.shape[1]
@@ -79,6 +107,7 @@ class OfflineExpansion(object):
         all_end_obs = []
         all_initial_idx = []
         all_end_idx = []
+        # TODO: end obs is incorrect. need to record terminate obs
         for i in range(num_processes):
             start_steps = np.array(episode_start[i][:-1])
             end_steps = np.array(episode_start[i][1:]) - 1
@@ -105,17 +134,9 @@ class OfflineExpansion(object):
         return (achieved_img, achieved_drawer, achieved_obj)
     
     def obs_to_env_states(self, obs):
-        # reset state and goal state
-        reset_robot_state = obs[..., 768: 768 + 7]
-        reset_drawer_state = obs[..., 768 * 2 + 7: 768 * 2 + 7 + 1]
-        reset_obj_state = obs[..., 768 * 2 + 7 + 2: 768 * 2 + 7 + 5]
-        goal_drawer_state = obs[..., 768 * 2 + 7 + 1: 768 * 2 + 7 + 2]
-        goal_obj_state = obs[..., 768 * 2 + 7 + 5: 768 * 2 + 7 + 8]
-        return {
-            "reset_robot_state": reset_robot_state, "reset_drawer_state": reset_drawer_state,
-            "reset_obj_state": reset_obj_state, "goal_drawer_state": goal_drawer_state, 
-            "goal_obj_state": goal_obj_state,
-        }
+        # Let the environment parse init Robot states + init and goal privileged states
+        # parse goal image features as well, and modify env wrapper to accept both raw image and features 
+        return self.env.get_state_from_obs(obs).detach().cpu().numpy()
     
     def relabel(self, obs, goal: tuple):
         goal_img, goal_drawer, goal_obj = goal
@@ -136,3 +157,48 @@ class OfflineExpansion(object):
                 values.append(self.value_op(obs[i * 1024: (i + 1) * 1024]))
         values = torch.cat(values, dim=0)
         return values
+
+    def roll_out(self, start_obs, second_value):
+        # environment should implement set_task, get_obs method.
+        # wrapper should wrap get_obs properly.
+        n_used_goals = 0
+        dones = [False for _ in range(self.env.num_envs)]
+        is_running = np.array([False] * self.env.num_envs)
+        tracked_task_idx = np.array([-1] * self.env.num_envs)
+        self.env.reset()
+        # set tasks and get obs
+        for i in range(min(start_obs.shape[0], self.env.num_envs)):
+            self.env.env_method("set_task", self.obs_to_env_states(start_obs[i]), indices=i)
+            is_running[i] = True
+            tracked_task_idx[i] = n_used_goals
+            n_used_goals += 1
+        obs = self.env.get_obs()
+        buffer = [{"obs": [obs[i].detach().cpu().numpy()], "action": []} for i in range(self.env.num_envs)]
+        dataset = []
+        while np.any(is_running):
+            with torch.no_grad():
+                actions = self.policy.act(obs)[1]
+            obs, reward, dones, infos = self.env.step(actions)
+            for i in range(self.env.num_envs):
+                buffer[i]["obs"].append(obs[i].detach().cpu().numpy())
+                buffer[i]["action"].append(actions[i].detach().cpu().numpy())
+                if dones[i]:
+                    # if is_running[i] and not infos[i]["is_success"]:
+                    #     print("start obs", start_obs[tracked_task_idx[i], -8:])
+                    #     print("value", second_value[tracked_task_idx[i]])
+                    if is_running[i] and infos[i]["is_success"]:
+                        # append last observation and move from buffer to dataset
+                        buffer[i]["obs"][-1] = infos[i]["terminal_observation"].detach().cpu().numpy()
+                        buffer[i]["obs"] = np.array(buffer[i]["obs"])
+                        buffer[i]["action"] = np.array(buffer[i]["action"])
+                        dataset.append({**buffer[i], "task_idx": tracked_task_idx[i]})
+                    if n_used_goals >= start_obs.shape[0]:
+                        is_running[i] = False
+                    else:
+                        # The environment is already reset by subproc vec wrapper, so we have to override here
+                        self.env.env_method("set_task", self.obs_to_env_states(start_obs[n_used_goals]), indices=i)
+                        obs[i] = self.env.get_obs(indices=i)
+                        tracked_task_idx[i] = n_used_goals
+                        n_used_goals += 1 
+                    buffer[i] = {"obs": [obs[i].detach().cpu().numpy()], "action": []}                   
+        return dataset

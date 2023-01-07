@@ -11,6 +11,7 @@ from typing import List, Dict
 import pickle
 import wandb
 import os
+from onpolicy.ppo.expansion import OfflineExpansion
 
 
 class PPO(object):
@@ -50,6 +51,7 @@ class PPO(object):
 
         self.optimizer = optim.Adam(policy.parameters(), lr=learning_rate, eps=eps)
         self.env_id = self.env.get_attr("spec")[0].id
+        self.expansion = OfflineExpansion(self.rollouts, self.env, self.policy)
 
     def learn(self, total_timesteps, callback=None):
         if self.warmup_dataset is not None:
@@ -147,11 +149,19 @@ class PPO(object):
                 for loss_name in losses.keys():
                     log_data[loss_name] = losses[loss_name]
                 wandb.log(log_data, step=self.num_timesteps)
+            if j % 10 == 0:
+                im_dataset, new_tasks = self.expansion.expand()
+                self.il_warmup(im_dataset)
+                task_per_env = new_tasks.shape[0] // self.n_envs if (
+                    new_tasks.shape[0] % self.n_envs) == 0 else new_tasks.shape[0] // self.n_envs + 1
+                for i in range(self.n_envs):
+                    self.env.env_method("add_tasks", new_tasks[task_per_env * i: task_per_env * (i + 1)])
 
     def il_warmup(self, dataset, train_value=False):
         dataset["obs"] = torch.from_numpy(dataset["obs"]).float().to(self.device)
         dataset["action"] = torch.from_numpy(dataset["action"]).float().to(self.device)
         num_sample = dataset["obs"].shape[0]
+        print("Num of samples", num_sample)
         indices = np.arange(num_sample)
         n_value_epoch = 5
         n_epoch = 15
