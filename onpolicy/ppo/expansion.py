@@ -86,8 +86,6 @@ class OfflineExpansion(object):
         im_dataset["original_obs"] = np.concatenate(im_dataset["original_obs"], axis=0)
         im_dataset["initial_value"] = np.array(im_dataset["initial_value"])
         im_dataset["interm_value"] = np.array(im_dataset["interm_value"])
-        with open("im_dataset.pkl", "wb") as f:
-            pickle.dump(im_dataset, f)
 
         # Prepare for the next round of environment interaction
         generated_obs = relabel_initial_obs[goal_idx]

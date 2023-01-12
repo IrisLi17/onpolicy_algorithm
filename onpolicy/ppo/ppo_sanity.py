@@ -149,13 +149,17 @@ class PPO(object):
                 for loss_name in losses.keys():
                     log_data[loss_name] = losses[loss_name]
                 wandb.log(log_data, step=self.num_timesteps)
-            if j % 10 == 0:
+            if j % 20 == 0:
                 im_dataset, new_tasks = self.expansion.expand()
-                self.il_warmup(im_dataset)
+                with open("im_dataset_%d.pkl" % (j // 20), "wb") as f:
+                    pickle.dump(im_dataset, f)
+                with open("generated_tasks_%d.pkl" % (j // 20), "wb") as f:
+                    pickle.dump(new_tasks, f)
                 task_per_env = new_tasks.shape[0] // self.n_envs if (
                     new_tasks.shape[0] % self.n_envs) == 0 else new_tasks.shape[0] // self.n_envs + 1
                 for i in range(self.n_envs):
                     self.env.env_method("add_tasks", new_tasks[task_per_env * i: task_per_env * (i + 1)])
+                self.il_warmup(im_dataset)
 
     def il_warmup(self, dataset, train_value=False):
         dataset["obs"] = torch.from_numpy(dataset["obs"]).float().to(self.device)
