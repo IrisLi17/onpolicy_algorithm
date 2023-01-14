@@ -17,7 +17,10 @@ class MvpStackingPolicy(ActorCriticPolicy):
         self.n_primitive = n_primitive
         self.act_dim = act_dim
         self.num_bin = num_bin
-        self.mvp_projector = nn.Linear(mvp_feat_dim, proj_img_dim)
+        self.mvp_projector = nn.Sequential(
+            nn.LayerNorm(mvp_feat_dim, eps=1e-6),
+            nn.Linear(mvp_feat_dim, proj_img_dim)
+        )
         if not state_only_value:
             self.value_mvp_projector = nn.Linear(mvp_feat_dim, proj_img_dim)
         else:
