@@ -20,97 +20,102 @@ class OfflineExpansion(object):
     def expand(self):
         initial_obs, end_obs, all_initial_idx, all_end_idx, all_is_success = self.parse_dataset()
         n_original = end_obs.shape[0]
-        # TODO: new goals should not only come from achieved end obs, they can from any achieved obs. 
-        # In this way the agent can potentially discover something new.
-        # Create more. 
-        multiplier = 20
-        _idx = np.random.choice(self.rollout.obs.shape[0] * self.rollout.obs.shape[1], 
-                                multiplier * end_obs.shape[0])
-        sampled_end_obs = self.rollout.obs.reshape(
-            (-1, *self.rollout.obs.shape[2:])
-        )[_idx].detach().cpu().numpy() # sample from all possible obs
-        initial_obs = np.tile(initial_obs, (multiplier, 1))
-        end_obs = np.tile(end_obs, (multiplier, 1))
-        sampled_achieved = self.obs_to_achieved(sampled_end_obs)
-        relabel_initial_obs = self.relabel(initial_obs, sampled_achieved)
-        relabel_interm_obs = self.relabel(end_obs, sampled_achieved)
-        initial_value = self.safe_get_value(relabel_initial_obs)
-        interm_value = self.safe_get_value(relabel_interm_obs)
-        # initial_value_clip = torch.clamp(initial_value, 1e-6, 1.).squeeze(dim=-1)
-        # interm_value_clip = torch.clamp(interm_value, 1e-6, 1.).squeeze(dim=-1)
-        # TODO: value may not be good. try state-only value function or value ensemble
-        metric = interm_value - initial_value
-        print("Sampled goal", metric.shape[0])
-        # Get the top 2/multiplier goals
-        goal_idx = torch.where(metric > torch.quantile(metric, 1.0 - 1.0 / multiplier))[0].detach().cpu().numpy()
-        # TODO: For debugging only, oracle goal selection
-        if self.env_id == "BulletDrawer-v1":
-            raise ValueError
-            goal_idx = torch.where(
-                torch.logical_and(
-                    torch.logical_or(
-                        (relabel_interm_obs[:, -8] - relabel_interm_obs[:, -7]).abs() < 0.02,
-                        torch.norm(relabel_interm_obs[:, -6:-3] - relabel_interm_obs[:, -3:]) < 0.04
-                    ),
-                    torch.logical_and(
-                        (relabel_initial_obs[:, -8] - relabel_initial_obs[:, -7]).abs() > 0.02,
-                        torch.norm(relabel_initial_obs[:, -6:-3] - relabel_initial_obs[:, -3:]) > 0.04
-                    )
-                )
-            )[0]
-        # Verify the second half in environment
-        second_half = self.roll_out(relabel_interm_obs[goal_idx], interm_value[goal_idx])
-        valid_goal_idx = np.array([goal_idx[item["task_idx"]] for item in second_half])
-        print("proposed and valid goal", goal_idx.shape, valid_goal_idx.shape)
-        # Get full imitation traj
-        # Get imitation dataset
         im_dataset = dict(obs=[], action=[], boundary=[], original_obs=[], 
                           initial_value=[], interm_value=[], terminate_obs=[])
         im_count = 0
-        for i in range(len(second_half)):
-            second_traj = second_half[i]
-            g_idx = valid_goal_idx[i]
-            # in original idx
-            original_idx = g_idx % n_original
-            traj_initial_idx = all_initial_idx[original_idx]
-            traj_end_idx = all_end_idx[original_idx]
-            assert traj_initial_idx[1] == traj_end_idx[1]
-            assert len(traj_initial_idx) == 2 and len(traj_end_idx) == 2
-            new_goal = (item[g_idx] for item in sampled_achieved)
-            # inclusive
-            traj_obs = self.rollout.obs[traj_initial_idx[0]: traj_end_idx[0], traj_initial_idx[1]].detach().cpu().numpy()
-            im_traj1_obs = self.relabel(traj_obs, new_goal)
-            im_traj1_action = self.rollout.actions[traj_initial_idx[0]: traj_end_idx[0], traj_initial_idx[1]].cpu().numpy()
-            im_traj2_obs = second_traj["obs"]
-            im_traj_obs = np.concatenate(
-                [im_traj1_obs, im_traj2_obs[:-1]], axis=0
-            )
-            im_traj_action = np.concatenate(
-                [im_traj1_action, second_traj["action"]], axis=0
-            )
-            im_dataset["obs"].append(im_traj_obs)
-            im_dataset["action"].append(im_traj_action)
-            im_dataset["terminate_obs"].append(im_traj2_obs[-1])
-            im_dataset["boundary"].append(im_count)
-            im_dataset["original_obs"].append(traj_obs)
-            im_dataset["initial_value"].append(initial_value[g_idx, 0].item())
-            im_dataset["interm_value"].append(interm_value[g_idx, 0].item())
-            im_count += im_traj_obs.shape[0]
-        im_dataset["obs"] = safe_concat(im_dataset["obs"], axis=0)
-        im_dataset["action"] = safe_concat(im_dataset["action"], axis=0)
-        im_dataset["boundary"] = np.array(im_dataset["boundary"])
-        im_dataset["original_obs"] = safe_concat(im_dataset["original_obs"], axis=0)
-        im_dataset["initial_value"] = np.array(im_dataset["initial_value"])
-        im_dataset["interm_value"] = np.array(im_dataset["interm_value"])
-
-        # Prepare for the next round of environment interaction
-        generated_obs = relabel_initial_obs[goal_idx]
-        # Convert to states that can pass into the environment
-        reset_env_states = self.obs_to_env_states(generated_obs)  
+        reset_env_states = []
+        flattened_obs = self.rollout.obs.view((-1, *self.rollout.obs.shape[2:])).detach().cpu().numpy() 
+        for _ in range(50):
+            # TODO: new goals should not only come from achieved end obs, they can from any achieved obs. 
+            # In this way the agent can potentially discover something new.
+            # Create more. 
+            multiplier = 20
+            _idx = np.random.choice(self.rollout.obs.shape[0] * self.rollout.obs.shape[1], 
+                                    multiplier * end_obs.shape[0])
+            sampled_end_obs = flattened_obs[_idx] # sample from all possible obs
+            tiled_initial_obs = np.tile(initial_obs, (multiplier, 1))
+            tiled_end_obs = np.tile(end_obs, (multiplier, 1))
+            sampled_achieved = self.obs_to_achieved(sampled_end_obs)
+            relabel_initial_obs = self.relabel(tiled_initial_obs, sampled_achieved)
+            relabel_interm_obs = self.relabel(tiled_end_obs, sampled_achieved)
+            oracle_feasible = self.env.env_method("oracle_feasible", relabel_interm_obs, indices=0)[0]
+            initial_value = self.safe_get_value(relabel_initial_obs)
+            interm_value = self.safe_get_value(relabel_interm_obs)
+            # initial_value_clip = torch.clamp(initial_value, 1e-6, 1.).squeeze(dim=-1)
+            # interm_value_clip = torch.clamp(interm_value, 1e-6, 1.).squeeze(dim=-1)
+            # TODO: value may not be good. try state-only value function or value ensemble
+            metric = interm_value - initial_value
+            print("Sampled goal", metric.shape[0])
+            # Get the top 2/multiplier goals
+            # goal_idx = torch.where(
+            #     # torch.logical_and(
+            #         interm_value > 0.7, 
+            #     # initial_value < 0.5,
+            #     # metric > torch.quantile(metric, 1.0 - 1.0 / multiplier)
+            #     # )
+            # )[0].detach().cpu().numpy()
+            goal_idx = np.where(oracle_feasible)[0]
+            print("Proposed goal", goal_idx.shape)
+            # TODO: For debugging only, oracle goal selection
+            if self.env_id == "BulletDrawer-v1":
+                raise ValueError
+                goal_idx = torch.where(
+                    torch.logical_and(
+                        torch.logical_or(
+                            (relabel_interm_obs[:, -8] - relabel_interm_obs[:, -7]).abs() < 0.02,
+                            torch.norm(relabel_interm_obs[:, -6:-3] - relabel_interm_obs[:, -3:]) < 0.04
+                        ),
+                        torch.logical_and(
+                            (relabel_initial_obs[:, -8] - relabel_initial_obs[:, -7]).abs() > 0.02,
+                            torch.norm(relabel_initial_obs[:, -6:-3] - relabel_initial_obs[:, -3:]) > 0.04
+                        )
+                    )
+                )[0]
+            # Verify the second half in environment
+            second_half = self.roll_out(relabel_interm_obs[goal_idx], interm_value[goal_idx])
+            valid_goal_idx = np.array([goal_idx[item["task_idx"]] for item in second_half])
+            print("valid goal", valid_goal_idx.shape)
+            # Get full imitation traj
+            # Get imitation dataset
+            
+            for i in range(len(second_half)):
+                second_traj = second_half[i]
+                g_idx = valid_goal_idx[i]
+                # in original idx
+                original_idx = g_idx % n_original
+                traj_initial_idx = all_initial_idx[original_idx]
+                traj_end_idx = all_end_idx[original_idx]
+                assert traj_initial_idx[1] == traj_end_idx[1]
+                assert len(traj_initial_idx) == 2 and len(traj_end_idx) == 2
+                new_goal = (item[g_idx] for item in sampled_achieved)
+                # inclusive
+                traj_obs = self.rollout.obs[traj_initial_idx[0]: traj_end_idx[0], traj_initial_idx[1]].detach().cpu().numpy()
+                im_traj1_obs = self.relabel(traj_obs, new_goal)
+                im_traj1_action = self.rollout.actions[traj_initial_idx[0]: traj_end_idx[0], traj_initial_idx[1]].cpu().numpy()
+                im_traj2_obs = second_traj["obs"]
+                im_traj_obs = np.concatenate(
+                    [im_traj1_obs, im_traj2_obs[:-1]], axis=0
+                )
+                im_traj_action = np.concatenate(
+                    [im_traj1_action, second_traj["action"]], axis=0
+                )
+                im_dataset["obs"].append(im_traj_obs)
+                im_dataset["action"].append(im_traj_action)
+                im_dataset["terminate_obs"].append(im_traj2_obs[-1])
+                im_dataset["boundary"].append(im_count)
+                im_dataset["original_obs"].append(traj_obs)
+                im_dataset["initial_value"].append(initial_value[g_idx, 0].item())
+                im_dataset["interm_value"].append(interm_value[g_idx, 0].item())
+                im_count += im_traj_obs.shape[0]
+            # Prepare for the next round of environment interaction
+            if len(valid_goal_idx):
+                generated_obs = relabel_initial_obs[valid_goal_idx]
+                # Convert to states that can pass into the environment
+                reset_env_states.append(self.obs_to_env_states(generated_obs))  
 
         # TODO: keep some original successful data
         original_success_dataset = dict(obs=[], action=[])
-        original_success_idx = np.where(all_is_success)[0][-len(second_half):]
+        original_success_idx = np.where(all_is_success)[0][-len(im_dataset["obs"]):]
         for i in range(original_success_idx.shape[0]):
             g_idx = original_success_idx[i]
             traj_initial_idx = all_initial_idx[g_idx]
@@ -119,8 +124,19 @@ class OfflineExpansion(object):
             traj_action = self.rollout.actions[traj_initial_idx[0]: traj_end_idx[0] + 1, traj_initial_idx[1]]
             original_success_dataset["obs"].append(traj_obs.detach().cpu().numpy())
             original_success_dataset["action"].append(traj_action.detach().cpu().numpy())
+        
+        im_dataset["obs"] = safe_concat(im_dataset["obs"], axis=0)
+        im_dataset["action"] = safe_concat(im_dataset["action"], axis=0)
+        im_dataset["boundary"] = np.array(im_dataset["boundary"])
+        im_dataset["original_obs"] = safe_concat(im_dataset["original_obs"], axis=0)
+        im_dataset["initial_value"] = np.array(im_dataset["initial_value"])
+        im_dataset["interm_value"] = np.array(im_dataset["interm_value"])
+
         original_success_dataset["obs"] = safe_concat(original_success_dataset["obs"], axis=0)
         original_success_dataset["action"] = safe_concat(original_success_dataset["action"], axis=0)
+
+        reset_env_states = np.concatenate(reset_env_states, axis=0)
+
         return im_dataset, original_success_dataset, reset_env_states
         
     def parse_dataset(self):
@@ -250,11 +266,11 @@ class OfflineExpansion(object):
                             ] - buffer[i]["obs"][1][
                                 self.feature_dim + self.robot_dim: 2 * self.feature_dim + self.robot_dim
                             ]) < 1e-3
-                            print("fail", "estimated value", second_value[tracked_task_idx[i]])
+                            # print("fail", "estimated value", second_value[tracked_task_idx[i]])
                             priv_info = infos[i]["terminal_observation"].detach().cpu().numpy()[-2 * self.state_dim:]
                             cur_state = priv_info.reshape((2, -1))[0].reshape((-1, 7))
                             goal_state = priv_info.reshape((2, -1))[1].reshape((-1, 7))
-                            print("terminal_observation", [(cur_state[j], goal_state[j]) for j in range(cur_state.shape[0])])
+                            # print("terminal_observation", [(cur_state[j], goal_state[j]) for j in range(cur_state.shape[0])])
                     if n_used_goals >= start_obs.shape[0]:
                         is_running[i] = False
                     else:

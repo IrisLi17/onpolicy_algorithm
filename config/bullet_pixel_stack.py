@@ -18,7 +18,7 @@ config = dict(
         mvp_feat_dim=768, 
         n_primitive=6, 
         act_dim=6, 
-        num_bin=32,
+        num_bin=33,
         proj_img_dim=128, 
         use_privilege=True,
         state_only_value=True
@@ -28,6 +28,6 @@ config = dict(
         n_steps=1024,
         gamma=0.95,
     ),
-    warmup_dataset="../stacking_env/warmup_dataset_stacking.pkl",
+    # warmup_dataset="../stacking_env/warmup_dataset_stacking.pkl",
     save_interval=20,
 )
