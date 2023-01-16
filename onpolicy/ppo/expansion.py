@@ -30,9 +30,8 @@ class OfflineExpansion(object):
             # In this way the agent can potentially discover something new.
             # Create more. 
             multiplier = 20
-            _idx = np.random.choice(self.rollout.obs.shape[0] * self.rollout.obs.shape[1], 
-                                    multiplier * end_obs.shape[0])
-            sampled_end_obs = flattened_obs[_idx] # sample from all possible obs
+            _idx = np.random.choice(n_original, multiplier * n_original)
+            sampled_end_obs = end_obs[_idx] # sample from terminal obs
             tiled_initial_obs = np.tile(initial_obs, (multiplier, 1))
             tiled_end_obs = np.tile(end_obs, (multiplier, 1))
             sampled_achieved = self.obs_to_achieved(sampled_end_obs)
@@ -77,6 +76,13 @@ class OfflineExpansion(object):
             second_half = self.roll_out(relabel_interm_obs[goal_idx], interm_value[goal_idx])
             valid_goal_idx = np.array([goal_idx[item["task_idx"]] for item in second_half])
             print("valid goal", valid_goal_idx.shape)
+            with open("debug_value.pkl", "wb") as f:
+                pickle.dump({
+                    "initial_value": initial_value.detach().cpu().numpy(),
+                    "interm_value": interm_value.detach().cpu().numpy(),
+                    "oracle_feasible": oracle_feasible,
+                    "valid_goal_idx": valid_goal_idx,
+                }, f)
             # Get full imitation traj
             # Get imitation dataset
             
@@ -110,8 +116,8 @@ class OfflineExpansion(object):
                 im_dataset["interm_value"].append(interm_value[g_idx, 0].item())
                 im_count += im_traj_obs.shape[0]
             # Prepare for the next round of environment interaction
-            if len(valid_goal_idx):
-                generated_obs = relabel_initial_obs[valid_goal_idx]
+            if len(goal_idx):
+                generated_obs = relabel_initial_obs[goal_idx]
                 # Convert to states that can pass into the environment
                 reset_env_states.append(self.obs_to_env_states(generated_obs))  
 
@@ -145,7 +151,13 @@ class OfflineExpansion(object):
         # inclusive
         episode_start = [[] for _ in range(num_processes)]
         for i in range(self.rollout.obs.shape[0]):
-            start_worker_idx = torch.where(self.rollout.masks[i, :, 0] == 0)[0]
+            if i == 0:
+                # although each episode does not necessarily start from step 0
+                # we need add this so that we do not miss the first terminal obs
+                start_worker_idx = torch.from_numpy(
+                    np.arange(num_processes)).long().to(self.rollout.masks.device)
+            else:
+                start_worker_idx = torch.where(self.rollout.masks[i, :, 0] == 0)[0]
             for j in start_worker_idx:
                 episode_start[j].append(i)
         all_initial_obs = []
@@ -153,7 +165,6 @@ class OfflineExpansion(object):
         all_initial_idx = []
         all_end_idx = []
         # all_is_success = []
-        # TODO: only success
         for i in range(num_processes):
             start_steps = np.array(episode_start[i][:-1])
             end_steps = np.array(episode_start[i][1:]) - 1
