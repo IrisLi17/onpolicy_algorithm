@@ -73,6 +73,7 @@ class PPO(object):
         # if self.reduction_strategy == "simultaneous":
 
         self.rollouts.obs[0].copy_(obs)
+        self.rollouts.masks[0].copy_(torch.zeros((self.n_envs, 1)))
         self.rollouts.to(self.device)
         self.num_timesteps = 0
         # loss_names = ["value_loss", "policy_loss", "entropy", "grad_norm", "param_norm",
@@ -82,6 +83,7 @@ class PPO(object):
         num_updates = int(total_timesteps) // self.n_steps // self.n_envs
 
         for j in range(num_updates):
+            terminal_obs = [[] for _ in range(self.n_envs)]
             if not isinstance(callback, list):
                 callback = [callback]
             for cb in callback:
@@ -107,6 +109,7 @@ class PPO(object):
                     if maybe_ep_info is not None:
                         ep_infos.append(maybe_ep_info)
                         episode_rewards.append(maybe_ep_info['r'])
+                        terminal_obs[e_idx].append(info["terminal_observation"])
 
                 # If done then clean the history of observations.
                 masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
@@ -124,8 +127,6 @@ class PPO(object):
             self.rollouts.compute_returns(next_value, self.use_gae, self.gamma, self.lam)
 
             losses = self.update()
-
-            self.rollouts.after_update()
 
             fps = int(self.num_timesteps / (time.time() - start))
             logger.logkv("serial_timesteps", j * self.n_steps)
@@ -160,7 +161,7 @@ class PPO(object):
                 wandb.log(log_data, step=self.num_timesteps)
             if (j - self.expansion.last_expansion_iter >= 20 or self.expansion.last_expansion_iter == np.inf) and safe_mean(
                 [ep_info["is_success"] for ep_info in ep_infos]) > 0.7:
-                im_dataset, original_success_dataset, new_tasks = self.expansion.expand()
+                im_dataset, original_success_dataset, new_tasks = self.expansion.expand(terminal_obs)
                 with open("im_dataset_%d.pkl" % j, "wb") as f:
                     pickle.dump(im_dataset, f)
                 with open("generated_tasks_%d.pkl" % j, "wb") as f:
@@ -169,8 +170,12 @@ class PPO(object):
                     new_tasks.shape[0] % self.n_envs) == 0 else new_tasks.shape[0] // self.n_envs + 1
                 for i in range(self.n_envs):
                     self.env.env_method("add_tasks", new_tasks[task_per_env * i: task_per_env * (i + 1)])
+                im_dataset["obs"] = np.concatenate([im_dataset["obs"], original_success_dataset["obs"]], axis=0)
+                im_dataset["action"] = np.concatenate([im_dataset["action"], original_success_dataset["action"]], axis=0)
                 self.il_warmup(im_dataset)
                 self.expansion.last_expansion_iter = j
+
+            self.rollouts.after_update()
 
     def il_warmup(self, dataset, train_value=False, n_epoch=15):
         dataset["obs"] = torch.from_numpy(dataset["obs"]).float().to(self.device)

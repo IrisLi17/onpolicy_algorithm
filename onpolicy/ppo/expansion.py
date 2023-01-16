@@ -17,15 +17,15 @@ class OfflineExpansion(object):
         self.last_expansion_iter = np.inf
     
     # We can run expand multiple times until we get enough data
-    def expand(self):
-        initial_obs, end_obs, all_initial_idx, all_end_idx, all_is_success = self.parse_dataset()
+    def expand(self, terminal_obs):
+        initial_obs, end_obs, all_initial_idx, all_end_idx = self.parse_dataset(terminal_obs)
         n_original = end_obs.shape[0]
         im_dataset = dict(obs=[], action=[], boundary=[], original_obs=[], 
                           initial_value=[], interm_value=[], terminate_obs=[])
         im_count = 0
         reset_env_states = []
         flattened_obs = self.rollout.obs.view((-1, *self.rollout.obs.shape[2:])).detach().cpu().numpy() 
-        for _ in range(50):
+        for _ in range(100):
             # TODO: new goals should not only come from achieved end obs, they can from any achieved obs. 
             # In this way the agent can potentially discover something new.
             # Create more. 
@@ -38,7 +38,9 @@ class OfflineExpansion(object):
             sampled_achieved = self.obs_to_achieved(sampled_end_obs)
             relabel_initial_obs = self.relabel(tiled_initial_obs, sampled_achieved)
             relabel_interm_obs = self.relabel(tiled_end_obs, sampled_achieved)
-            oracle_feasible = self.env.env_method("oracle_feasible", relabel_interm_obs, indices=0)[0]
+            oracle_initial_feasible = self.env.env_method("oracle_feasible", relabel_initial_obs, indices=0)[0]
+            oracle_interm_feasible = self.env.env_method("oracle_feasible", relabel_interm_obs, indices=0)[0]
+            oracle_feasible = np.logical_and(~oracle_initial_feasible, oracle_interm_feasible)
             initial_value = self.safe_get_value(relabel_initial_obs)
             interm_value = self.safe_get_value(relabel_interm_obs)
             # initial_value_clip = torch.clamp(initial_value, 1e-6, 1.).squeeze(dim=-1)
@@ -89,9 +91,9 @@ class OfflineExpansion(object):
                 assert len(traj_initial_idx) == 2 and len(traj_end_idx) == 2
                 new_goal = (item[g_idx] for item in sampled_achieved)
                 # inclusive
-                traj_obs = self.rollout.obs[traj_initial_idx[0]: traj_end_idx[0], traj_initial_idx[1]].detach().cpu().numpy()
+                traj_obs = self.rollout.obs[traj_initial_idx[0]: traj_end_idx[0] + 1, traj_initial_idx[1]].detach().cpu().numpy()
                 im_traj1_obs = self.relabel(traj_obs, new_goal)
-                im_traj1_action = self.rollout.actions[traj_initial_idx[0]: traj_end_idx[0], traj_initial_idx[1]].cpu().numpy()
+                im_traj1_action = self.rollout.actions[traj_initial_idx[0]: traj_end_idx[0] + 1, traj_initial_idx[1]].cpu().numpy()
                 im_traj2_obs = second_traj["obs"]
                 im_traj_obs = np.concatenate(
                     [im_traj1_obs, im_traj2_obs[:-1]], axis=0
@@ -115,9 +117,8 @@ class OfflineExpansion(object):
 
         # TODO: keep some original successful data
         original_success_dataset = dict(obs=[], action=[])
-        original_success_idx = np.where(all_is_success)[0][-len(im_dataset["obs"]):]
-        for i in range(original_success_idx.shape[0]):
-            g_idx = original_success_idx[i]
+        for i in range(len(im_dataset["obs"])):
+            g_idx = i
             traj_initial_idx = all_initial_idx[g_idx]
             traj_end_idx = all_end_idx[g_idx]
             traj_obs = self.rollout.obs[traj_initial_idx[0]: traj_end_idx[0] + 1, traj_initial_idx[1]]
@@ -139,11 +140,11 @@ class OfflineExpansion(object):
 
         return im_dataset, original_success_dataset, reset_env_states
         
-    def parse_dataset(self):
+    def parse_dataset(self, terminal_obs):
         num_processes = self.rollout.obs.shape[1]
         # inclusive
         episode_start = [[] for _ in range(num_processes)]
-        for i in range(self.rollout.obs.shape[0] - 1):
+        for i in range(self.rollout.obs.shape[0]):
             start_worker_idx = torch.where(self.rollout.masks[i, :, 0] == 0)[0]
             for j in start_worker_idx:
                 episode_start[j].append(i)
@@ -151,26 +152,32 @@ class OfflineExpansion(object):
         all_end_obs = []
         all_initial_idx = []
         all_end_idx = []
-        all_is_success = []
-        # TODO: end obs is incorrect. need to record terminate obs
+        # all_is_success = []
+        # TODO: only success
         for i in range(num_processes):
             start_steps = np.array(episode_start[i][:-1])
             end_steps = np.array(episode_start[i][1:]) - 1
-            initial_obs = self.rollout.obs[torch.from_numpy(start_steps).long(), i]
-            end_obs = self.rollout.obs[torch.from_numpy(end_steps).long(), i]
             is_success = self.rollout.rewards[torch.from_numpy(end_steps).long(), i] > 0.5
+            is_success = is_success.squeeze(dim=-1).cpu().numpy()
+            # only keep success
+            start_steps = start_steps[is_success]
+            end_steps = end_steps[is_success]
+            initial_obs = self.rollout.obs[torch.from_numpy(start_steps).long(), i]
+            # end_obs = self.rollout.obs[torch.from_numpy(end_steps).long(), i]
+            end_obs = torch.stack(terminal_obs[i], dim=0).detach().cpu().numpy()[is_success]
+            assert end_obs.shape[0] == initial_obs.shape[0]
             all_initial_obs.append(initial_obs.detach().cpu().numpy())
-            all_end_obs.append(end_obs.detach().cpu().numpy())
+            all_end_obs.append(end_obs)
             all_initial_idx.append(np.stack([start_steps, i * np.ones_like(start_steps)], axis=-1))
             all_end_idx.append(np.stack([end_steps, i * np.ones_like(end_steps)], axis=-1))
-            all_is_success.append(is_success.detach().cpu().numpy())
+            # all_is_success.append(is_success)
             # obs to state
         all_initial_obs = np.concatenate(all_initial_obs, axis=0)
         all_end_obs = np.concatenate(all_end_obs, axis=0)
         all_initial_idx = np.concatenate(all_initial_idx, axis=0)
         all_end_idx = np.concatenate(all_end_idx, axis=0)
-        all_is_success = np.concatenate(all_is_success, axis=0)
-        return all_initial_obs, all_end_obs, all_initial_idx, all_end_idx, all_is_success
+        # all_is_success = np.concatenate(all_is_success, axis=0)
+        return all_initial_obs, all_end_obs, all_initial_idx, all_end_idx
         # get (initial state, end state)
     
     def obs_to_achieved(self, obs):
