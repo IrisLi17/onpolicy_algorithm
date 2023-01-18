@@ -1,4 +1,5 @@
 from onpolicy.storage import RolloutStorage
+from utils import logger
 import torch
 import numpy as np
 import pickle
@@ -23,14 +24,17 @@ class OfflineExpansion(object):
         im_dataset = dict(obs=[], action=[], boundary=[], original_obs=[], 
                           initial_value=[], interm_value=[], terminate_obs=[])
         im_count = 0
+        sampled_task_count = 0
+        proposed_task_count = 0
+        valid_task_count = 0
         reset_env_states = []
-        flattened_obs = self.rollout.obs.view((-1, *self.rollout.obs.shape[2:])).detach().cpu().numpy() 
         for _ in range(100):
             # TODO: new goals should not only come from achieved end obs, they can from any achieved obs. 
             # In this way the agent can potentially discover something new.
             # Create more. 
             multiplier = 20
             _idx = np.random.choice(n_original, multiplier * n_original)
+            sampled_task_count += _idx.shape[0]
             sampled_end_obs = end_obs[_idx] # sample from terminal obs
             tiled_initial_obs = np.tile(initial_obs, (multiplier, 1))
             tiled_end_obs = np.tile(end_obs, (multiplier, 1))
@@ -39,7 +43,7 @@ class OfflineExpansion(object):
             relabel_interm_obs = self.relabel(tiled_end_obs, sampled_achieved)
             oracle_initial_feasible = self.env.env_method("oracle_feasible", relabel_initial_obs, indices=0)[0]
             oracle_interm_feasible = self.env.env_method("oracle_feasible", relabel_interm_obs, indices=0)[0]
-            oracle_feasible = np.logical_and(~oracle_initial_feasible, oracle_interm_feasible)
+            oracle_feasible = np.logical_and(oracle_initial_feasible > 1, oracle_interm_feasible == 1)
             initial_value = self.safe_get_value(relabel_initial_obs)
             interm_value = self.safe_get_value(relabel_interm_obs)
             # initial_value_clip = torch.clamp(initial_value, 1e-6, 1.).squeeze(dim=-1)
@@ -57,6 +61,7 @@ class OfflineExpansion(object):
             # )[0].detach().cpu().numpy()
             goal_idx = np.where(oracle_feasible)[0]
             print("Proposed goal", goal_idx.shape)
+            proposed_task_count += goal_idx.shape[0]
             # TODO: For debugging only, oracle goal selection
             if self.env_id == "BulletDrawer-v1":
                 raise ValueError
@@ -76,11 +81,13 @@ class OfflineExpansion(object):
             second_half = self.roll_out(relabel_interm_obs[goal_idx], interm_value[goal_idx])
             valid_goal_idx = np.array([goal_idx[item["task_idx"]] for item in second_half])
             print("valid goal", valid_goal_idx.shape)
+            valid_task_count += valid_goal_idx.shape[0]
             with open("debug_value.pkl", "wb") as f:
                 pickle.dump({
                     "initial_value": initial_value.detach().cpu().numpy(),
                     "interm_value": interm_value.detach().cpu().numpy(),
-                    "oracle_feasible": oracle_feasible,
+                    "oracle_initial_feasible": oracle_initial_feasible,
+                    "oracle_interm_feasible": oracle_interm_feasible,
                     "valid_goal_idx": valid_goal_idx,
                 }, f)
             # Get full imitation traj
@@ -120,10 +127,13 @@ class OfflineExpansion(object):
                 generated_obs = relabel_initial_obs[goal_idx]
                 # Convert to states that can pass into the environment
                 reset_env_states.append(self.obs_to_env_states(generated_obs))  
+            
+            if len(im_dataset["obs"]) >= n_original:
+                break
 
         # TODO: keep some original successful data
         original_success_dataset = dict(obs=[], action=[])
-        for i in range(len(im_dataset["obs"])):
+        for i in range(min(len(im_dataset["obs"]), all_initial_idx.shape[0])):
             g_idx = i
             traj_initial_idx = all_initial_idx[g_idx]
             traj_end_idx = all_end_idx[g_idx]
@@ -143,6 +153,12 @@ class OfflineExpansion(object):
         original_success_dataset["action"] = safe_concat(original_success_dataset["action"], axis=0)
 
         reset_env_states = np.concatenate(reset_env_states, axis=0)
+
+        logger.logkv("Sampled tasks", sampled_task_count)
+        logger.logkv("Proposed tasks", proposed_task_count)
+        logger.logkv("Valid tasks", valid_task_count)
+        logger.logkv("New tasks", reset_env_states.shape[0])
+        logger.logkv("Composite steps", im_dataset["obs"].shape[0])
 
         return im_dataset, original_success_dataset, reset_env_states
         

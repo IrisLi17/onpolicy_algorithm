@@ -61,7 +61,7 @@ class PPO(object):
                 new_tasks.shape[0] % self.n_envs) == 0 else new_tasks.shape[0] // self.n_envs + 1
             print("tasks per env", task_per_env)
             for i in range(self.n_envs):
-                self.env.env_method("add_tasks", new_tasks[task_per_env * i: task_per_env * (i + 1)])
+                self.env.env_method("add_tasks", new_tasks[task_per_env * i: task_per_env * (i + 1)], indices=i)
                 
         if self.warmup_dataset is not None:
             self.il_warmup(self.warmup_dataset, n_epoch=15)
@@ -159,19 +159,22 @@ class PPO(object):
                 for loss_name in losses.keys():
                     log_data[loss_name] = losses[loss_name]
                 wandb.log(log_data, step=self.num_timesteps)
-            if (j - self.expansion.last_expansion_iter >= 20 or self.expansion.last_expansion_iter == np.inf) and safe_mean(
+            if (j - self.expansion.last_expansion_iter >= 10 or self.expansion.last_expansion_iter == np.inf) and safe_mean(
                 [ep_info["is_success"] for ep_info in ep_infos]) > 0.7:
+                logger.logkv("n_updates", j)
                 im_dataset, original_success_dataset, new_tasks = self.expansion.expand(terminal_obs)
-                with open("im_dataset_%d.pkl" % j, "wb") as f:
+                logger.dumpkvs()
+                with open(os.path.join(logger.get_dir(), "im_dataset_%d.pkl" % j), "wb") as f:
                     pickle.dump(im_dataset, f)
-                with open("generated_tasks_%d.pkl" % j, "wb") as f:
+                with open(os.path.join(logger.get_dir(), "generated_tasks_%d.pkl" % j), "wb") as f:
                     pickle.dump(new_tasks, f)
                 task_per_env = new_tasks.shape[0] // self.n_envs if (
                     new_tasks.shape[0] % self.n_envs) == 0 else new_tasks.shape[0] // self.n_envs + 1
                 for i in range(self.n_envs):
-                    self.env.env_method("add_tasks", new_tasks[task_per_env * i: task_per_env * (i + 1)])
+                    self.env.env_method("add_tasks", new_tasks[task_per_env * i: task_per_env * (i + 1)], indices=i)
                 im_dataset["obs"] = np.concatenate([im_dataset["obs"], original_success_dataset["obs"]], axis=0)
                 im_dataset["action"] = np.concatenate([im_dataset["action"], original_success_dataset["action"]], axis=0)
+                logger.logkv("n_updates", j)
                 self.il_warmup(im_dataset)
                 self.expansion.last_expansion_iter = j
 
@@ -190,7 +193,7 @@ class PPO(object):
                       param_norm=deque(maxlen=50), value_loss=deque(maxlen=50),
                       action_param_error=deque(maxlen=50), action_type_error=deque(maxlen=50))
         optimizer = optim.Adam([p[1] for p in self.policy.named_parameters() if not "log_std" in p[0]], lr=1e-3, weight_decay=1e-5)
-        self.save(os.path.join(logger.get_dir(), "model_init.pt"))
+        # self.save(os.path.join(logger.get_dir(), "model_init.pt"))
         
         if train_value:
             target_returns = torch.from_numpy(self.compute_discounted_reward(dataset["boundary"] + [dataset["obs"].shape[0]])).unsqueeze(dim=-1).float().to(self.device)
@@ -255,7 +258,7 @@ class PPO(object):
                 success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)
                 # print("Success episode: drawer %d / %d, object %d / %d" % (success_episodes[0], total_episodes[0], success_episodes[1], total_episodes[1]))
                 print("Success episode: %d / %d" % (success_episodes, total_episodes))
-                self.save(os.path.join(logger.get_dir(), "model_init%d.pt" % i))
+                # self.save(os.path.join(logger.get_dir(), "model_init%d.pt" % i))
             logger.logkv("epoch", i)
             for k in losses:
                 # print(k, np.mean(losses[k]))
