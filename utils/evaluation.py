@@ -1,30 +1,40 @@
 import torch, os, shutil
 import matplotlib.pyplot as plt
 import numpy as np
+import pickle
 
 
-def evaluate(env, policy, n_episode):
+def evaluate(env, policy, n_episode, task_file="generated_tasks_0.pkl"):
+    with open(task_file, "rb") as f:
+        new_tasks = pickle.load(f)
+    task_per_env = new_tasks.shape[0] // env.num_envs if (
+        new_tasks.shape[0] % env.num_envs) == 0 else new_tasks.shape[0] // env.num_envs + 1
+    task_per_env = min(100, task_per_env)
+    for i in range(env.num_envs):
+        env.env_method("add_tasks", new_tasks[task_per_env * i: task_per_env * (i + 1)])
+                
     episode_count = 0
     frame_count = 0
     obs = env.reset()
-    print("goal state", env.get_attr("goal")[0]["state"])
+    print("goal state", env.get_attr("goal_dict")[0]["full_state"])
+    goal_img = env.env_method("get_goal_image")[0]
     episode_reward = 0
     episode_length = 0
     reset_step = 0
-    env.env_method("start_rec", "output", indices=0)
-    # fig, ax = plt.subplots(1, 1)
-    # if os.path.exists("tmp"):
-    #     shutil.rmtree("tmp")
-    # os.makedirs("tmp", exist_ok=True)
+    # env.env_method("start_rec", "output_0", indices=0)
+    fig, ax = plt.subplots(1, 1)
+    if os.path.exists("tmp"):
+        shutil.rmtree("tmp")
+    os.makedirs("tmp", exist_ok=True)
     if hasattr(env, "obs_rms"):
         init_obs_mean = env.obs_rms.mean.copy()
         init_obs_std = env.obs_rms.var.copy()
     while episode_count < n_episode:
-        # img = env.render(mode="rgb_array")
-        # ax.cla()
-        # ax.imshow(img)
-        # plt.imsave("tmp/tmp%d.png" % frame_count, img)
-        # plt.pause(0.01)
+        img = env.render(mode="rgb_array")
+        ax.cla()
+        ax.imshow(img)
+        plt.imsave("tmp/tmp%d.png" % frame_count, np.concatenate([img, goal_img], axis=1))
+        plt.pause(0.01)
         with torch.no_grad():
             _, actions, _, _ = policy.act(obs, deterministic=False)
         # if frame_count == reset_step:
@@ -38,13 +48,20 @@ def evaluate(env, policy, n_episode):
             assert np.linalg.norm(env.obs_rms.mean - init_obs_mean) < 1e-5
             assert np.linalg.norm(env.obs_rms.var - init_obs_std) < 1e-5
         if done[0]:
-            print("episode reward", episode_reward, "episode length", episode_length)
-            # print("goal", env.get_attr("goal")[0]["state"])
+            # env.env_method("end_rec", indices=0)
+            img = env.render(mode="rgb_array")
+            plt.imsave("tmp/tmp%d.png" % frame_count, np.concatenate([img, goal_img], axis=1))
+            frame_count += 1
+            print("terminal obs", info[0]["terminal_observation"][768 * 2 + 7:].reshape(2, -1))
+            print(episode_count, "episode reward", episode_reward, "episode length", episode_length)
+            obs = env.reset()
+            print("goal", env.get_attr("goal_dict")[0]["full_state"])
             episode_count += 1
             episode_reward = 0
             episode_length = 0
             reset_step = frame_count
-    env.env_method("end_rec", indices=0)
+            # env.env_method("start_rec", "output_%d" % episode_count, indices=0)
+            goal_img = env.env_method("get_goal_image")[0]
 
 
 def evaluate_fixed_states(env, policy, device, initial_states, goals, n_episode=100, deterministic=True, debug=False):

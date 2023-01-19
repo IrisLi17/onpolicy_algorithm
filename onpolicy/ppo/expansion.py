@@ -162,6 +162,76 @@ class OfflineExpansion(object):
 
         return im_dataset, original_success_dataset, reset_env_states
         
+    def expand_new(self, terminal_obs):
+        im_dataset = dict(obs=[], action=[], terminate_obs=[])
+        reset_env_states = []
+        initial_obs, end_obs, all_initial_idx, all_end_idx = self.parse_dataset(terminal_obs)
+        n_original = end_obs.shape[0]
+        n_expand = 0
+        env_batch = 64
+        _n_round = n_original // env_batch if (n_original % env_batch == 0) else n_original // env_batch + 1
+        for i in range(_n_round):
+            mb_end_obs = end_obs[i * env_batch: (i + 1) * env_batch]
+            mb_size = mb_end_obs.shape[0]
+            _, mb_end_achieved = self.obs_to_achieved(mb_end_obs)
+            goals = self.perturb(mb_end_achieved, 1024)
+            relabel_interm = self.relabel(np.tile(mb_end_obs, (1024, 1)), goals)
+            relabel_initial = self.relabel(np.tile(initial_obs[i * env_batch: (i+1) * env_batch], (1024, 1)), goals)
+            oracle_initial_feasible = self.env.env_method("oracle_feasible", relabel_initial, indices=0)[0]
+            oracle_interm_feasible = self.env.env_method("oracle_feasible", relabel_interm, indices=0)[0]
+            oracle_feasible = np.logical_and(oracle_initial_feasible > 1, oracle_interm_feasible == 1)
+            goal_idx = np.where(oracle_feasible)[0]
+            second_half = self.roll_out(relabel_interm[goal_idx], None)
+            valid_goal_idx = np.array([goal_idx[item["task_idx"]] for item in second_half])
+            print("valid goal", valid_goal_idx.shape)
+            # Store 
+            for _idx, j in enumerate(valid_goal_idx):
+                original_idx = i * env_batch + j % mb_size
+                traj_initial_idx = all_initial_idx[original_idx]
+                traj_end_idx = all_end_idx[original_idx]
+                new_goal = goals[j]
+                second_traj = second_half[_idx]
+                traj_obs = self.rollout.obs[traj_initial_idx[0]: traj_end_idx[0] + 1, traj_initial_idx[1]].detach().cpu().numpy()
+                im_traj1_obs = self.relabel(traj_obs, new_goal)
+                im_traj1_action = self.rollout.actions[traj_initial_idx[0]: traj_end_idx[0] + 1, traj_initial_idx[1]].cpu().numpy()
+                im_traj2_obs = second_traj["obs"]
+                im_traj_obs = np.concatenate(
+                    [im_traj1_obs, im_traj2_obs[:-1]], axis=0
+                )
+                im_traj_action = np.concatenate(
+                    [im_traj1_action, second_traj["action"]], axis=0
+                )
+                im_dataset["obs"].append(im_traj_obs)
+                im_dataset["action"].append(im_traj_action)
+                im_dataset["terminate_obs"].append(im_traj2_obs[-1])
+            if len(goal_idx):
+                generated_obs = relabel_initial[goal_idx]
+                # Convert to states that can pass into the environment
+                reset_env_states.append(self.obs_to_env_states(generated_obs)) 
+        # TODO: keep some original successful data
+        original_success_dataset = dict(obs=[], action=[])
+        for i in range(min(len(im_dataset["obs"]), all_initial_idx.shape[0])):
+            g_idx = i
+            traj_initial_idx = all_initial_idx[g_idx]
+            traj_end_idx = all_end_idx[g_idx]
+            traj_obs = self.rollout.obs[traj_initial_idx[0]: traj_end_idx[0] + 1, traj_initial_idx[1]]
+            traj_action = self.rollout.actions[traj_initial_idx[0]: traj_end_idx[0] + 1, traj_initial_idx[1]]
+            original_success_dataset["obs"].append(traj_obs.detach().cpu().numpy())
+            original_success_dataset["action"].append(traj_action.detach().cpu().numpy())
+        
+        im_dataset["obs"] = safe_concat(im_dataset["obs"], axis=0)
+        im_dataset["action"] = safe_concat(im_dataset["action"], axis=0)
+        im_dataset["boundary"] = np.array(im_dataset["boundary"])
+        im_dataset["original_obs"] = safe_concat(im_dataset["original_obs"], axis=0)
+        im_dataset["initial_value"] = np.array(im_dataset["initial_value"])
+        im_dataset["interm_value"] = np.array(im_dataset["interm_value"])
+
+        original_success_dataset["obs"] = safe_concat(original_success_dataset["obs"], axis=0)
+        original_success_dataset["action"] = safe_concat(original_success_dataset["action"], axis=0)
+
+        reset_env_states = np.concatenate(reset_env_states, axis=0)
+        return im_dataset, original_success_dataset, reset_env_states
+    
     def parse_dataset(self, terminal_obs):
         num_processes = self.rollout.obs.shape[1]
         # inclusive
@@ -241,6 +311,11 @@ class OfflineExpansion(object):
             new_obs[..., self.feature_dim + self.robot_dim: 2 * self.feature_dim + self.robot_dim] = goal_img
             new_obs[..., 2 * self.feature_dim + self.robot_dim + self.state_dim:] = goal_state
         return new_obs
+
+    def perturb(self, achieved_state, n_sample):
+        tiled_states = np.tile(achieved_state, (n_sample, 1))
+        states = self.env.perturb(tiled_states)
+        # Try to filter out infeasible states using value?
 
     def safe_get_value(self, obs):
         if obs.shape[0] % 1024 == 0:

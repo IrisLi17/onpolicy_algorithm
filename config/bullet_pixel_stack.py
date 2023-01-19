@@ -28,6 +28,6 @@ config = dict(
         n_steps=1024,
         gamma=0.95,
     ),
-    # warmup_dataset="../stacking_env/warmup_dataset_stacking.pkl",
+    warmup_dataset="../stacking_env/warmup_dataset_stacking.pkl",
     save_interval=20,
 )

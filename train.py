@@ -36,7 +36,9 @@ def main():
     import sys
     sys.path.append("../stacking_env")
     from bullet_envs.utils.make_vec_env import make_vec_env
-    env = make_vec_env(config["env_id"], config["num_workers"], device, log_dir=config["log_dir"], **config["create_env_kwargs"])
+    env = make_vec_env(
+        config["env_id"], config["num_workers"], device, reset_when_done=not args.play,
+        log_dir=config["log_dir"], **config["create_env_kwargs"])
     print(env.observation_space, env.action_space)
     if config["policy"].get("use_privilege", False):
         config["policy"]["privilege_dim"] = env.get_attr("privilege_dim")[0]
@@ -77,7 +79,9 @@ def main():
     else:
         model.load(args.load_path, eval=True)
         from utils.evaluation import evaluate
-        evaluate(env, policy, 20)
+        # "../stacking_env/warmup_tasks.pkl"
+        # "logs/ppo_BulletPixelStack-v1/base1/generated_tasks_61.pkl"
+        evaluate(env, policy, 10, task_file="logs/ppo_BulletPixelStack-v1/base/generated_tasks_0.pkl")
 
 
 if __name__ == "__main__":
