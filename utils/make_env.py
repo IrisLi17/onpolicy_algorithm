@@ -5,22 +5,22 @@ from utils.monitor import Monitor
 from vec_env.subproc_vec_env import SubprocVecEnv
 import torch
 import sys
-try:
-    import panda_gym
-except ImportError:
-    import sys
-    sys.path.append("../panda-gym")
-    import panda_gym
-try:
-    sys.path.append("../motion_imitation")
-    import envs
-    sys.path.remove("../motion_imitation")
-except:
-    pass
+# try:
+#     import panda_gym
+# except ImportError:
+#     import sys
+#     sys.path.append("../panda-gym")
+#     import panda_gym
+# try:
+#     sys.path.append("../motion_imitation")
+#     import envs
+#     sys.path.remove("../motion_imitation")
+# except:
+#     pass
 
 try:
     sys.path.append("../stacking_env")
-    import env
+    import bullet_envs
     sys.path.remove("../stacking_env")
 except:
     pass
@@ -48,7 +48,7 @@ def make_env(env_id, rank, log_dir=None, obs_keys=None, done_when_success=False,
     return env
 
 
-def make_vec_env(env_id, num_workers, device, normalize, training, **kwargs):
+def make_vec_env(env_id, num_workers, device, normalize=False, training=True, **kwargs):
     def make_env_thunk(i):
         return lambda: make_env(env_id, i, **kwargs)
     env = SubprocVecEnv([make_env_thunk(i) for i in range(num_workers)])

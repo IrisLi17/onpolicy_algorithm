@@ -114,7 +114,7 @@ class FlexibleTimeLimitWrapper(gym.Wrapper):
 
     def step(self, action):
         assert self._elapsed_steps is not None, "Cannot call env.step() before calling reset()"
-        time_limit = self.env.unwrapped.n_to_stack * 50 if self.env.unwrapped.n_to_stack > 2 else 100
+        time_limit = np.max(self.env.unwrapped.n_to_stack) * 15 if any(self.env.unwrapped.n_to_stack > 2*np.ones(len(self.env.unwrapped.n_to_stack))) else 30
         observation, reward, done, info = self.env.step(action)
         self._elapsed_steps += 1
         if self._elapsed_steps >= time_limit:
