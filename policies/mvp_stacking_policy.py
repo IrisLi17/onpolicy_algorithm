@@ -10,6 +10,7 @@ class MvpStackingPolicy(ActorCriticPolicy):
     def __init__(
         self, mvp_feat_dim, n_primitive, act_dim, num_bin,
         proj_img_dim, privilege_dim=0, state_only_value=False,
+        attn_value=False,
     ) -> None:
         super().__init__()
         self.mvp_feat_dim = mvp_feat_dim
@@ -18,7 +19,12 @@ class MvpStackingPolicy(ActorCriticPolicy):
         self.n_primitive = n_primitive
         self.act_dim = act_dim
         self.num_bin = num_bin
+        self.attn_value = attn_value
         self.mvp_projector = nn.Sequential(
+            nn.LayerNorm(mvp_feat_dim, eps=1e-6),
+            nn.Linear(mvp_feat_dim, proj_img_dim)
+        )
+        self.mvp_diff_projector = nn.Sequential(
             nn.LayerNorm(mvp_feat_dim, eps=1e-6),
             nn.Linear(mvp_feat_dim, proj_img_dim)
         )
@@ -47,19 +53,28 @@ class MvpStackingPolicy(ActorCriticPolicy):
             )
         else:
             # TODO: use a transformer may be more appropriate
-            self.value_layers = nn.Sequential(
-                nn.Linear(privilege_dim, 256), nn.SELU(),
-                nn.Linear(256, 128), nn.SELU(),
-                nn.Linear(128, 64), nn.SELU(),
-                nn.Linear(64, 1)
-            )
+            if attn_value:
+                self.value_object_encode_linear = nn.Linear(8, 64)
+                _encoder_layer = nn.TransformerEncoderLayer(
+                    d_model=64, nhead=1, dim_feedforward=64, dropout=0.0,
+                    ) # seq, batch, feature
+                self.value_attn_encoder = nn.TransformerEncoder(_encoder_layer, num_layers=3)
+                self.value_agg = nn.Linear(64, 1)
+            else:
+                self.value_layers = nn.Sequential(
+                    nn.Linear(privilege_dim, 256), nn.SELU(),
+                    nn.Linear(256, 128), nn.SELU(),
+                    nn.Linear(128, 64), nn.SELU(),
+                    nn.Linear(64, 1)
+                )
         self.is_recurrent = False
         self.recurrent_hidden_state_size = 1
         self.use_param_mask = False
         self.init_weights(self.act_type, [0.01])
         for i in range(act_dim):
             self.init_weights(self.act_param[i], [0.01])
-        self.init_weights(self.value_layers, [np.sqrt(2), np.sqrt(2), np.sqrt(2), 1.0])
+        if not attn_value:
+            self.init_weights(self.value_layers, [np.sqrt(2), np.sqrt(2), np.sqrt(2), 1.0])
     
     @staticmethod
     def init_weights(sequential, scales):
@@ -75,7 +90,7 @@ class MvpStackingPolicy(ActorCriticPolicy):
     def forward(self, obs, rnn_hxs=None, rnn_masks=None):
         cur_img_feat, goal_img_feat, privilege_info = self._obs_parser(obs)
         proj_cur_feat = self.mvp_projector(cur_img_feat)
-        proj_goal_feat = self.mvp_projector(goal_img_feat)
+        proj_goal_feat = self.mvp_diff_projector(goal_img_feat - cur_img_feat)
         proj_input = torch.cat([proj_cur_feat, proj_goal_feat], dim=-1)
         proj_input = self.act_feature(proj_input)
         # print("input std", torch.std(proj_input, dim=0).mean(), "input mean", torch.mean(proj_input))
@@ -92,7 +107,22 @@ class MvpStackingPolicy(ActorCriticPolicy):
         act_type_dist = Categorical(logits=act_type_logits)
         act_param_logits = [self.act_param[i](proj_input) for i in range(len(self.act_param))]
         act_param_dist = [Categorical(logits=act_param_logits[i]) for i in range(self.act_dim)]
-        value_pred = self.value_layers(proj_value_input)
+        if not self.attn_value:
+            value_pred = self.value_layers(proj_value_input)
+        else:
+            obj_and_goals = proj_value_input.reshape((proj_value_input.shape[0], 2, -1, 7))
+            bsz = obj_and_goals.shape[0]
+            dtype = obj_and_goals.dtype
+            device = obj_and_goals.device
+            token_embed = torch.cat([
+                torch.zeros((bsz, 1, obj_and_goals.shape[2], 7), dtype=dtype, device=device),
+                torch.ones((bsz, 1, obj_and_goals.shape[2], 7), dtype=dtype, device=device)
+            ], dim=1)
+            obj_and_goals = torch.cat([obj_and_goals, token_embed], dim=-1).reshape((bsz, -1, 8)).transpose(0, 1)
+            obj_goal_embed = self.value_object_encode_linear(obj_and_goals)
+            value_feature = self.value_attn_encoder(obj_goal_embed)
+            value_pred = self.value_agg(torch.mean(value_feature, dim=0))
+        
         return value_pred, (act_type_dist, act_param_dist), rnn_hxs
     
     def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False):
@@ -136,7 +166,8 @@ class MvpStackingPolicy(ActorCriticPolicy):
         actions[:, 1:] = torch.clamp(actions[:, 1:], -1., 1.)
         log_prob, _, _ = self.evaluate_actions(obs, rnn_hxs, rnn_masks, actions)
         # TODO: do we need clip
-        loss = -log_prob.mean()
+        loss = -torch.clamp(log_prob, max=-2).mean()
+        # loss = -log_prob.mean()
         return loss
 
 
