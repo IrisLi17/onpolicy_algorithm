@@ -51,9 +51,13 @@ def main():
     policy.to(device)
     if (not args.play) and config.get("warmup_dataset") is not None:
         import pickle
+        import numpy as np
         with open(config["warmup_dataset"], "rb") as f:
             dataset = pickle.load(f)
-        config["train"]["warmup_dataset"] = dataset
+        warmup_dataset = dict()
+        for k in dataset[0].keys():
+            warmup_dataset[k] = np.concatenate([dataset[i][k] for i in range(2)], axis=0)
+        config["train"]["warmup_dataset"] = warmup_dataset
     
     if config["algo"] == "ppo":
         from onpolicy import PPO
@@ -78,10 +82,11 @@ def main():
         model.learn(config["total_timesteps"], callback)
     else:
         model.load(args.load_path, eval=True)
-        from utils.evaluation import evaluate
+        from utils.evaluation import evaluate, evaluate_tasks
+        evaluate_tasks(env, policy, "distill_tasks.pkl")
         # "../stacking_env/warmup_tasks.pkl"
         # "logs/ppo_BulletPixelStack-v1/base1/generated_tasks_61.pkl"
-        evaluate(env, policy, 10, task_file="logs/ppo_BulletPixelStack-v1/base/generated_tasks_0.pkl")
+        # evaluate(env, policy, 10, task_file="distill_tasks_full.pkl")
 
 
 if __name__ == "__main__":

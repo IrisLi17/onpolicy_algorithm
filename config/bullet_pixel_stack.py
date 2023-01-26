@@ -5,7 +5,7 @@ config = dict(
     env_id="BulletPixelStack-v1",
     num_workers=64,
     algo="ppo",
-    name="base",
+    name="distill_seq2",
     total_timesteps=int(5e7),
     create_env_kwargs=dict(
         kwargs=dict(
@@ -18,16 +18,18 @@ config = dict(
         mvp_feat_dim=768, 
         n_primitive=6, 
         act_dim=6, 
-        num_bin=33,
+        num_bin=21,
         proj_img_dim=128, 
         use_privilege=True,
-        state_only_value=True
+        state_only_value=True,
+        attn_value=True,
     ),
     train=dict(
         use_wandb=False,
         n_steps=1024,
         gamma=0.95,
     ),
-    warmup_dataset="../stacking_env/warmup_dataset_stacking.pkl",
-    save_interval=20,
+    # warmup_dataset="../stacking_env/warmup_dataset_stacking.pkl",
+    warmup_dataset="distill_dataset_stacking.pkl",
+    save_interval=10,
 )

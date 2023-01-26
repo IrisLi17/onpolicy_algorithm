@@ -135,3 +135,29 @@ def evaluate_fixed_states(env, policy, device, initial_states, goals, n_episode=
     # print(n_to_stack_stats, n_to_stack_success)
     return success_episode, total_episode
 
+
+def evaluate_tasks(env, policy, task_file="test_tasks.pkl"):
+    with open(task_file, "rb") as f:
+        new_tasks = pickle.load(f)
+    assert env.num_envs == 1
+    task_per_env = new_tasks.shape[0] // env.num_envs if (
+        new_tasks.shape[0] % env.num_envs) == 0 else new_tasks.shape[0] // env.num_envs + 1
+    for i in range(env.num_envs):
+        env.env_method("add_tasks", new_tasks[task_per_env * i: task_per_env * (i + 1)])
+    n_episode = 0
+    n_success = 0
+    detail_stats = [[0, 0] for _ in range(7)]
+    obs = env.reset()
+    n_to_move = env.env_method("oracle_feasible", obs.detach().cpu().numpy())[0][0]
+    while n_episode < 100:
+        with torch.no_grad():
+            _, actions, _, _ = policy.act(obs, deterministic=False)
+        obs, reward, done, info = env.step(actions)
+        if done[0]:
+            n_success += info[0]["is_success"]
+            n_episode += 1
+            detail_stats[n_to_move][0] += info[0]["is_success"]
+            detail_stats[n_to_move][1] += 1
+            obs = env.reset()
+            n_to_move = env.env_method("oracle_feasible", obs.detach().cpu().numpy())[0][0]
+    print("success rate", n_success / n_episode, "detail stats", detail_stats)

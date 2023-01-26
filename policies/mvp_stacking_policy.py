@@ -20,6 +20,10 @@ class MvpStackingPolicy(ActorCriticPolicy):
         self.act_dim = act_dim
         self.num_bin = num_bin
         self.attn_value = attn_value
+        # self.mvp_double_projector = nn.Sequential(
+        #     nn.LayerNorm(mvp_feat_dim * 2, eps=1e-6),
+        #     nn.Linear(mvp_feat_dim * 2, proj_img_dim * 2)
+        # )
         self.mvp_projector = nn.Sequential(
             nn.LayerNorm(mvp_feat_dim, eps=1e-6),
             nn.Linear(mvp_feat_dim, proj_img_dim)
@@ -92,6 +96,7 @@ class MvpStackingPolicy(ActorCriticPolicy):
         proj_cur_feat = self.mvp_projector(cur_img_feat)
         proj_goal_feat = self.mvp_diff_projector(goal_img_feat - cur_img_feat)
         proj_input = torch.cat([proj_cur_feat, proj_goal_feat], dim=-1)
+        # proj_input = self.mvp_double_projector(torch.cat([cur_img_feat, goal_img_feat - cur_img_feat], dim=-1))
         proj_input = self.act_feature(proj_input)
         # print("input std", torch.std(proj_input, dim=0).mean(), "input mean", torch.mean(proj_input))
         if self.value_mvp_projector is not None:
@@ -144,7 +149,7 @@ class MvpStackingPolicy(ActorCriticPolicy):
         ]
         act_params = [2 * (act_param / (self.num_bin - 1.0)) - 1 for act_param in act_params]
         actions = torch.cat([act_type] + act_params, dim=-1)
-        log_prob = torch.sum(torch.stack([act_type_logprob] + act_param_logprob, dim=-1), dim=-1)
+        log_prob = torch.mean(torch.stack([act_type_logprob] + act_param_logprob, dim=-1), dim=-1)
         return value_pred, actions, log_prob, rnn_hxs
     
     def evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions):
@@ -156,17 +161,17 @@ class MvpStackingPolicy(ActorCriticPolicy):
             act_param_dist[i].log_prob(act_params[:, i])
             for i in range(self.act_dim)
         ]
-        log_prob = torch.sum(torch.stack([act_type_logprob] + act_param_logprob, dim=-1), dim=-1, keepdim=True)
+        log_prob = torch.mean(torch.stack([act_type_logprob] + act_param_logprob, dim=-1), dim=-1, keepdim=True)
         act_type_ent = act_type_dist.entropy()
         act_param_ent = [act_param_dist[i].entropy() for i in range(self.act_dim)]
-        entropy = torch.sum(torch.stack([act_type_ent] + act_param_ent, dim=-1), dim=-1).mean()
+        entropy = torch.mean(torch.stack([act_type_ent] + act_param_ent, dim=-1), dim=-1).mean()
         return log_prob, entropy, rnn_hxs
     
     def get_bc_loss(self, obs, rnn_hxs, rnn_masks, actions):
         actions[:, 1:] = torch.clamp(actions[:, 1:], -1., 1.)
         log_prob, _, _ = self.evaluate_actions(obs, rnn_hxs, rnn_masks, actions)
         # TODO: do we need clip
-        loss = -torch.clamp(log_prob, max=-2).mean()
+        loss = -torch.clamp(log_prob, max=-0.3).mean()
         # loss = -log_prob.mean()
         return loss
 

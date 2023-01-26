@@ -54,9 +54,10 @@ class PPO(object):
         self.expansion = OfflineExpansion(self.rollouts, self.env, self.policy)
 
     def learn(self, total_timesteps, callback=None):
-        if os.path.exists("../stacking_env/warmup_tasks.pkl"):
-            with open("../stacking_env/warmup_tasks.pkl", "rb") as f:
+        if os.path.exists("distill_tasks.pkl"):
+            with open("distill_tasks.pkl", "rb") as f:
                 new_tasks = pickle.load(f)
+            new_tasks = np.concatenate(new_tasks[0:2], axis=0) # start from 1,2 obj
             task_per_env = new_tasks.shape[0] // self.n_envs if (
                 new_tasks.shape[0] % self.n_envs) == 0 else new_tasks.shape[0] // self.n_envs + 1
             print("tasks per env", task_per_env)
@@ -64,7 +65,7 @@ class PPO(object):
                 self.env.env_method("add_tasks", new_tasks[task_per_env * i: task_per_env * (i + 1)], indices=i)
                 
         if self.warmup_dataset is not None:
-            self.il_warmup(self.warmup_dataset, n_epoch=15)
+            self.il_warmup(self.warmup_dataset, n_epoch=15, eval_interval=1, batch_size=32)
         episode_rewards = deque(maxlen=1000)
         ep_infos = deque(maxlen=1000)
         obs = self.env.reset()
@@ -159,8 +160,9 @@ class PPO(object):
                 for loss_name in losses.keys():
                     log_data[loss_name] = losses[loss_name]
                 wandb.log(log_data, step=self.num_timesteps)
-            if (j - self.expansion.last_expansion_iter >= 10 or self.expansion.last_expansion_iter == np.inf) and safe_mean(
-                [ep_info["is_success"] for ep_info in ep_infos]) > 0.7:
+            if False:
+            # if (j - self.expansion.last_expansion_iter >= 10 or self.expansion.last_expansion_iter == np.inf) and safe_mean(
+            #     [ep_info["is_success"] for ep_info in ep_infos]) > 0.7:
                 logger.logkv("n_updates", j)
                 im_dataset, original_success_dataset, new_tasks = self.expansion.expand(terminal_obs)
                 logger.dumpkvs()
@@ -180,19 +182,17 @@ class PPO(object):
 
             self.rollouts.after_update()
 
-    def il_warmup(self, dataset, train_value=False, n_epoch=15):
+    def il_warmup(self, dataset, train_value=False, n_epoch=15, batch_size=32, eval_interval=10):
         dataset["obs"] = torch.from_numpy(dataset["obs"]).float().to(self.device)
         dataset["action"] = torch.from_numpy(dataset["action"]).float().to(self.device)
         num_sample = dataset["obs"].shape[0]
         print("Num of samples", num_sample)
         indices = np.arange(num_sample)
         n_value_epoch = 5
-        batch_size = 32 # 128
-        eval_interval = 10
         losses = dict(policy_loss=deque(maxlen=50), grad_norm=deque(maxlen=50), 
                       param_norm=deque(maxlen=50), value_loss=deque(maxlen=50),
                       action_param_error=deque(maxlen=50), action_type_error=deque(maxlen=50))
-        optimizer = optim.Adam([p[1] for p in self.policy.named_parameters() if not "log_std" in p[0]], lr=1e-3, weight_decay=1e-5)
+        optimizer = optim.Adam([p[1] for p in self.policy.named_parameters() if not "log_std" in p[0]], lr=1e-3, weight_decay=0)
         # self.save(os.path.join(logger.get_dir(), "model_init.pt"))
         
         if train_value:
@@ -240,6 +240,7 @@ class PPO(object):
                 grads = [p.grad for p in self.policy.parameters() if p.grad is not None]
                 device = grads[0].device
                 total_norm = torch.norm(torch.stack([torch.norm(g.detach(), 2).to(device) for g in grads]), 2)
+                # total_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 optimizer.step()
                 with torch.no_grad():
                     _, pred_actions, pred_logprob, _ = self.policy.act(obs_batch, deterministic=True)
