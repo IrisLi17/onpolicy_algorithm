@@ -5,3 +5,5 @@ tmp
 *.png
 wandb
 .vscode
+*.pkl
+*.pt
