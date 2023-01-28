@@ -7,10 +7,10 @@ import os, shutil
 import numpy as np
 import pybullet as p
 import pickle
-import sys
-sys.path.append("../stacking_env")
-from bullet_envs.env.pixel_stacking import get_n_to_move
-sys.path.remove("../stacking_env")
+# import sys
+# sys.path.append("../stacking_env")
+# from bullet_envs.env.pixel_stacking import get_n_to_move
+# sys.path.remove("../stacking_env")
 
 
 class StackingObsParser(object):
@@ -141,6 +141,7 @@ def main(args):
                 name="allow_rotation",
                 primitive=True,
                 generate_data=True,
+                use_expand_goal_prob=1,
                 # action_dim=5,
             ),
         ),
@@ -175,7 +176,7 @@ def main(args):
     #     shutil.rmtree("tmp")
     # os.makedirs("tmp")
     # create_generalize_task(env, image_processor, 1000)
-    collect_data(env, policy, image_processor, 30_000)
+    collect_data(env, policy, image_processor, 10_000, balance=False)
     # create test tasks
 
     return
@@ -197,7 +198,8 @@ def main(args):
             episode_count += 1
 
 
-def collect_data(env, policy, image_processor, desired_num):
+def collect_data(env, policy, image_processor, desired_num, balance):
+    assert env.get_attr("use_expand_goal_prob")[0] == 1
     device = image_processor.device
     n_object = 6
     im_dataset = [dict(obs=[], action=[], boundary=[]) for _ in range(n_object)]
@@ -209,7 +211,7 @@ def collect_data(env, policy, image_processor, desired_num):
         traj_buffer[i]["state"].append(obs[i].detach().cpu().numpy())
         traj_buffer[i]["img"].append(imgs[i].astype(np.uint8))
     n_data = [0 for _ in range(n_object)]
-    while sum(n_data) < desired_num:
+    while sum([len(task_arrays[i]) for i in range(n_object)]) < desired_num:
         with torch.no_grad():
             _, action, _, _ = policy.act(obs)
         obs, reward, done, info = env.step(action)
@@ -218,7 +220,7 @@ def collect_data(env, policy, image_processor, desired_num):
             traj_buffer[i]["state"].append(obs[i].detach().cpu().numpy())
             traj_buffer[i]["img"].append(info[i]["img"])
             if done[i]:
-                if info[i]["is_success"] and len(traj_buffer[i]["action"]) < 10:
+                if info[i]["is_success"] and reward[i] == 1 and len(traj_buffer[i]["action"]) < 20:
                     traj_buffer[i]["state"][-1] = info[i]["terminal_observation"]
                     # Bridge to pixel env observation, relabel
                     # TODO
@@ -238,19 +240,21 @@ def collect_data(env, policy, image_processor, desired_num):
                             objects_obs[:goal_idx], 
                             np.tile(goal_state, (goal_idx, 1))
                         ], axis=-1).astype(np.float32)
-                        n_to_move = get_n_to_move(new_obs[0:1], n_object, 0.05, 0.75)[0]
-                        im_dataset[n_to_move - 1]["obs"].append(new_obs)
-                        im_dataset[n_to_move - 1]["action"].append(np.stack(traj_buffer[i]["action"][:goal_idx], axis=0).astype(np.float32))
-                        im_dataset[n_to_move - 1]["boundary"].append(n_data[n_to_move - 1])
-                        assert im_dataset[n_to_move - 1]["obs"][-1].shape[0] == im_dataset[n_to_move - 1]["action"][-1].shape[0]
-                        n_data[n_to_move - 1] += new_obs.shape[0]
-                        # print(n_data)
-                        # get task array
-                        task_array = np.concatenate([
-                            robot_obs[0], objects_obs[0], objects_obs[goal_idx], traj_features[goal_idx]
-                        ])
-                        task_arrays[n_to_move - 1].append(task_array)
-                    print(sum(n_data))
+                        # n_to_move = get_n_to_move(new_obs[0:1], n_object, 0.05, 0.75)[0]
+                        n_to_move = len(set([int(traj_buffer[i]["action"][j][0]) for j in range(goal_idx)]))
+                        if (not balance) or (balance and len(task_arrays[n_to_move - 1]) < desired_num / n_object):
+                            im_dataset[n_to_move - 1]["obs"].append(new_obs)
+                            im_dataset[n_to_move - 1]["action"].append(np.stack(traj_buffer[i]["action"][:goal_idx], axis=0).astype(np.float32))
+                            im_dataset[n_to_move - 1]["boundary"].append(n_data[n_to_move - 1])
+                            assert im_dataset[n_to_move - 1]["obs"][-1].shape[0] == im_dataset[n_to_move - 1]["action"][-1].shape[0]
+                            n_data[n_to_move - 1] += new_obs.shape[0]
+                            # print(n_data)
+                            # get task array
+                            task_array = np.concatenate([
+                                robot_obs[0], objects_obs[0], objects_obs[goal_idx], traj_features[goal_idx]
+                            ])
+                            task_arrays[n_to_move - 1].append(task_array)
+                    print(sum([len(task_arrays[i]) for i in range(n_object)]), sum(n_data))
                 reset_img = env.env_method("render", indices=i)[0]
                 traj_buffer[i] = dict(
                     img=[reset_img.astype(np.uint8)], state=[obs[i].detach().cpu().numpy()], action=[]
@@ -262,14 +266,15 @@ def collect_data(env, policy, image_processor, desired_num):
         task_arrays[i] = np.stack(task_arrays[i], axis=0)
     for i in range(n_object):
         print("N to move", i + 1, "count", im_dataset[i]["boundary"].shape[0])
-    with open("distill_dataset_stacking.pkl", "wb") as f:
+    with open("distill_dataset_stacking%s.pkl" % ("_balance" if balance else ""), "wb") as f:
         pickle.dump(im_dataset, f)
-    with open("distill_tasks.pkl", "wb") as f:
+    with open("distill_tasks%s.pkl" % ("_balance" if balance else ""), "wb") as f:
         pickle.dump(task_arrays, f)
 
 
 def create_generalize_task(env, image_processor, desired_num):
     all_task_arrays = []
+    all_state_task_trajs = []
     count = 0
     while count < desired_num:
         tasks = env.env_method("create_generalize_task")
@@ -278,9 +283,36 @@ def create_generalize_task(env, image_processor, desired_num):
         task_arrays = np.concatenate([robot_obs, init_states, goal_states, goal_feat], axis=-1)
         all_task_arrays.append(task_arrays)
         count += task_arrays.shape[0]
+        # also create state version
+        for e_idx in range(robot_obs.shape[0]):
+            state_task_array = [robot_obs[e_idx, 1:7], np.zeros(5)]
+            for i in range(init_states.shape[1] // 7):
+                state_task_array.append(
+                    np.concatenate([
+                        init_states[e_idx, 7 * i: 7 * i + 3], 
+                        np.zeros(3),
+                        np.array(p.getEulerFromQuaternion(init_states[e_idx, 7 * i + 3: 7 * (i + 1)])),
+                        np.zeros(7),
+                    ])
+                )
+            n_max_goal = env.get_attr("n_max_goal")[0]
+            goal_idxs = np.argsort(goal_states[e_idx].reshape((-1, 7))[:, 2])[-n_max_goal:]
+            for i in range(env.get_attr("n_max_goal")[0]):
+                onehot = np.zeros(6)
+                onehot[goal_idxs[i]] = 1
+                state_task_array.append(
+                    np.concatenate([
+                        np.array([0., 1., 0.]), 
+                        goal_states[e_idx, goal_idxs[i] * 7: goal_idxs[i] * 7 + 3],
+                        onehot
+                    ])
+                )
+            all_state_task_trajs.append({"obs": [np.concatenate(state_task_array)]})
     all_task_arrays = np.concatenate(all_task_arrays, axis=0)
     with open("test_tasks.pkl", "wb") as f:
         pickle.dump(all_task_arrays, f)
+    with open("test_state_tasks.pkl", "wb") as f:
+        pickle.dump({"expansion": all_state_task_trajs}, f)
 
 
 if __name__ == "__main__":
