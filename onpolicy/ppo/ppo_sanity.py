@@ -58,11 +58,13 @@ class PPO(object):
             with open("distill_tasks.pkl", "rb") as f:
                 new_tasks = pickle.load(f)
             new_tasks = np.concatenate(new_tasks[0:2], axis=0) # start from 1,2 obj
+            task_idx = np.arange(new_tasks.shape[0])
+            np.random.shuffle(task_idx)
             task_per_env = new_tasks.shape[0] // self.n_envs if (
                 new_tasks.shape[0] % self.n_envs) == 0 else new_tasks.shape[0] // self.n_envs + 1
             print("tasks per env", task_per_env)
             for i in range(self.n_envs):
-                self.env.env_method("add_tasks", new_tasks[task_per_env * i: task_per_env * (i + 1)], indices=i)
+                self.env.env_method("add_tasks", new_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]], indices=i)
                 
         if self.warmup_dataset is not None:
             self.il_warmup(self.warmup_dataset, n_epoch=15, eval_interval=1, batch_size=32)

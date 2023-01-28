@@ -139,11 +139,17 @@ def evaluate_fixed_states(env, policy, device, initial_states, goals, n_episode=
 def evaluate_tasks(env, policy, task_file="test_tasks.pkl"):
     with open(task_file, "rb") as f:
         new_tasks = pickle.load(f)
+    if isinstance(new_tasks, list):
+        new_tasks = np.concatenate(new_tasks[2:3], axis=0)
+    task_idx = np.arange(new_tasks.shape[0])
+    np.random.shuffle(task_idx)
     assert env.num_envs == 1
     task_per_env = new_tasks.shape[0] // env.num_envs if (
         new_tasks.shape[0] % env.num_envs) == 0 else new_tasks.shape[0] // env.num_envs + 1
+    print("all tasks", new_tasks.shape[0])
+    print("task per env", task_per_env)
     for i in range(env.num_envs):
-        env.env_method("add_tasks", new_tasks[task_per_env * i: task_per_env * (i + 1)])
+        env.env_method("add_tasks", new_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]])
     n_episode = 0
     n_success = 0
     detail_stats = [[0, 0] for _ in range(7)]
