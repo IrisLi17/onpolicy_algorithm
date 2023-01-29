@@ -149,7 +149,7 @@ class MvpStackingPolicy(ActorCriticPolicy):
         ]
         act_params = [2 * (act_param / (self.num_bin - 1.0)) - 1 for act_param in act_params]
         actions = torch.cat([act_type] + act_params, dim=-1)
-        log_prob = torch.mean(torch.stack([act_type_logprob] + act_param_logprob, dim=-1), dim=-1)
+        log_prob = torch.sum(torch.stack([act_type_logprob] + act_param_logprob, dim=-1), dim=-1)
         return value_pred, actions, log_prob, rnn_hxs
     
     def evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions):
@@ -161,17 +161,17 @@ class MvpStackingPolicy(ActorCriticPolicy):
             act_param_dist[i].log_prob(act_params[:, i])
             for i in range(self.act_dim)
         ]
-        log_prob = torch.mean(torch.stack([act_type_logprob] + act_param_logprob, dim=-1), dim=-1, keepdim=True)
+        log_prob = torch.sum(torch.stack([act_type_logprob] + act_param_logprob, dim=-1), dim=-1, keepdim=True)
         act_type_ent = act_type_dist.entropy()
         act_param_ent = [act_param_dist[i].entropy() for i in range(self.act_dim)]
-        entropy = torch.mean(torch.stack([act_type_ent] + act_param_ent, dim=-1), dim=-1).mean()
+        entropy = torch.sum(torch.stack([act_type_ent] + act_param_ent, dim=-1), dim=-1).mean()
         return log_prob, entropy, rnn_hxs
     
     def get_bc_loss(self, obs, rnn_hxs, rnn_masks, actions):
         actions[:, 1:] = torch.clamp(actions[:, 1:], -1., 1.)
         log_prob, _, _ = self.evaluate_actions(obs, rnn_hxs, rnn_masks, actions)
         # TODO: do we need clip
-        loss = -torch.clamp(log_prob, max=-0.3).mean()
+        loss = -torch.clamp(log_prob, max=-2).mean()
         # loss = -log_prob.mean()
         return loss
 

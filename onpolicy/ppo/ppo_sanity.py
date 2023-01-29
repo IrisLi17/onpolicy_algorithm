@@ -57,7 +57,7 @@ class PPO(object):
         if os.path.exists("distill_tasks.pkl"):
             with open("distill_tasks.pkl", "rb") as f:
                 new_tasks = pickle.load(f)
-            new_tasks = np.concatenate(new_tasks[0:2], axis=0) # start from 1,2 obj
+            new_tasks = np.concatenate(new_tasks[0:6], axis=0) # start from 1,2 obj
             task_idx = np.arange(new_tasks.shape[0])
             np.random.shuffle(task_idx)
             task_per_env = new_tasks.shape[0] // self.n_envs if (

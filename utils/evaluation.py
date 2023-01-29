@@ -7,11 +7,15 @@ import pickle
 def evaluate(env, policy, n_episode, task_file="generated_tasks_0.pkl"):
     with open(task_file, "rb") as f:
         new_tasks = pickle.load(f)
+    if isinstance(new_tasks, list):
+        new_tasks = np.concatenate(new_tasks[0:6], axis=0)
+    task_idx = np.arange(new_tasks.shape[0])
+    np.random.shuffle(task_idx)
     task_per_env = new_tasks.shape[0] // env.num_envs if (
         new_tasks.shape[0] % env.num_envs) == 0 else new_tasks.shape[0] // env.num_envs + 1
     task_per_env = min(100, task_per_env)
     for i in range(env.num_envs):
-        env.env_method("add_tasks", new_tasks[task_per_env * i: task_per_env * (i + 1)])
+        env.env_method("add_tasks", new_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]])
                 
     episode_count = 0
     frame_count = 0
@@ -140,7 +144,7 @@ def evaluate_tasks(env, policy, task_file="test_tasks.pkl"):
     with open(task_file, "rb") as f:
         new_tasks = pickle.load(f)
     if isinstance(new_tasks, list):
-        new_tasks = np.concatenate(new_tasks[2:3], axis=0)
+        new_tasks = np.concatenate(new_tasks[0:6], axis=0)
     task_idx = np.arange(new_tasks.shape[0])
     np.random.shuffle(task_idx)
     assert env.num_envs == 1

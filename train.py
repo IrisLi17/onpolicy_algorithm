@@ -56,7 +56,7 @@ def main():
             dataset = pickle.load(f)
         warmup_dataset = dict()
         for k in dataset[0].keys():
-            warmup_dataset[k] = np.concatenate([dataset[i][k] for i in range(2)], axis=0)
+            warmup_dataset[k] = np.concatenate([dataset[i][k] for i in range(6)], axis=0)
         config["train"]["warmup_dataset"] = warmup_dataset
     
     if config["algo"] == "ppo":
@@ -83,10 +83,10 @@ def main():
     else:
         model.load(args.load_path, eval=True)
         from utils.evaluation import evaluate, evaluate_tasks
-        evaluate_tasks(env, policy, "distill_tasks.pkl")
+        # evaluate_tasks(env, policy, "distill_tasks.pkl")
         # "../stacking_env/warmup_tasks.pkl"
         # "logs/ppo_BulletPixelStack-v1/base1/generated_tasks_61.pkl"
-        # evaluate(env, policy, 10, task_file="distill_tasks_full.pkl")
+        evaluate(env, policy, 10, task_file="distill_tasks.pkl")
 
 
 if __name__ == "__main__":
