@@ -67,7 +67,7 @@ class PPO(object):
                 self.env.env_method("add_tasks", new_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]], indices=i)
                 
         if self.warmup_dataset is not None:
-            self.il_warmup(self.warmup_dataset, n_epoch=15, eval_interval=1, batch_size=32)
+            self.il_warmup(self.warmup_dataset, n_epoch=30, eval_interval=2, batch_size=32)
         episode_rewards = deque(maxlen=1000)
         ep_infos = deque(maxlen=1000)
         obs = self.env.reset()

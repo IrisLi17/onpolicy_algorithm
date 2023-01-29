@@ -20,17 +20,18 @@ class MvpStackingPolicy(ActorCriticPolicy):
         self.act_dim = act_dim
         self.num_bin = num_bin
         self.attn_value = attn_value
+        slot_dim = 48
         # self.mvp_double_projector = nn.Sequential(
         #     nn.LayerNorm(mvp_feat_dim * 2, eps=1e-6),
         #     nn.Linear(mvp_feat_dim * 2, proj_img_dim * 2)
         # )
         self.mvp_projector = nn.Sequential(
             nn.LayerNorm(mvp_feat_dim, eps=1e-6),
-            nn.Linear(mvp_feat_dim, proj_img_dim)
+            # nn.Linear(mvp_feat_dim, proj_img_dim)
         )
         self.mvp_diff_projector = nn.Sequential(
             nn.LayerNorm(mvp_feat_dim, eps=1e-6),
-            nn.Linear(mvp_feat_dim, proj_img_dim)
+            # nn.Linear(mvp_feat_dim, proj_img_dim)
         )
         if not state_only_value:
             self.value_mvp_projector = nn.Linear(mvp_feat_dim, proj_img_dim)
@@ -38,15 +39,21 @@ class MvpStackingPolicy(ActorCriticPolicy):
             assert privilege_dim > 0
             self.value_mvp_projector = None
         self.act_feature = nn.Sequential(
+            nn.Linear(2 * mvp_feat_dim, 2 * proj_img_dim), nn.SELU(),
             nn.Linear(2 * proj_img_dim, 256), nn.SELU(),
-            nn.Linear(256, 256), nn.SELU(),
             nn.Linear(256, 256), nn.SELU()
         )
+        self.act_feature_slots = nn.ModuleList([
+            nn.Sequential(
+                # nn.Linear(256, 256), nn.SELU(),
+                nn.Linear(256, slot_dim)
+            ) for _ in range(n_primitive)
+        ])
         self.act_type = nn.Sequential(
-            nn.Linear(256, n_primitive)
+            nn.Linear(slot_dim, 1)
         )
         self.act_param = nn.ModuleList([nn.Sequential(
-            nn.Linear(256, num_bin)
+            nn.Linear(slot_dim, num_bin)
         ) for _ in range(act_dim)])
         if not state_only_value:
             self.value_layers = nn.Sequential(
@@ -98,6 +105,9 @@ class MvpStackingPolicy(ActorCriticPolicy):
         proj_input = torch.cat([proj_cur_feat, proj_goal_feat], dim=-1)
         # proj_input = self.mvp_double_projector(torch.cat([cur_img_feat, goal_img_feat - cur_img_feat], dim=-1))
         proj_input = self.act_feature(proj_input)
+        act_slot_feature = torch.stack([
+            self.act_feature_slots[i](proj_input) for i in range(len(self.act_feature_slots))
+        ], dim=1)  # bsz, n_slot, slot_dim
         # print("input std", torch.std(proj_input, dim=0).mean(), "input mean", torch.mean(proj_input))
         if self.value_mvp_projector is not None:
             value_proj_cur_feat = self.value_mvp_projector(cur_img_feat)
@@ -107,11 +117,13 @@ class MvpStackingPolicy(ActorCriticPolicy):
                 proj_value_input = torch.cat([proj_value_input, privilege_info], dim=-1)
         else:
             proj_value_input = privilege_info
-        act_type_logits = self.act_type(proj_input)
+        # act_type_logits = self.act_type(proj_input)
+        act_type_logits = self.act_type(act_slot_feature).squeeze(dim=-1) # bsz, n_slot
         # print("act type logits", act_type_logits[:5])
-        act_type_dist = Categorical(logits=act_type_logits)
-        act_param_logits = [self.act_param[i](proj_input) for i in range(len(self.act_param))]
-        act_param_dist = [Categorical(logits=act_param_logits[i]) for i in range(self.act_dim)]
+        # act_type_dist = Categorical(logits=act_type_logits)
+        # act_param_logits = [self.act_param[i](proj_input) for i in range(len(self.act_param))]
+        act_param_logits = [self.act_param[i](act_slot_feature) for i in range(len(self.act_param))]
+        # act_param_dist = [Categorical(logits=act_param_logits[i]) for i in range(self.act_dim)]
         if not self.attn_value:
             value_pred = self.value_layers(proj_value_input)
         else:
@@ -128,23 +140,29 @@ class MvpStackingPolicy(ActorCriticPolicy):
             value_feature = self.value_attn_encoder(obj_goal_embed)
             value_pred = self.value_agg(torch.mean(value_feature, dim=0))
         
-        return value_pred, (act_type_dist, act_param_dist), rnn_hxs
+        return value_pred, (act_type_logits, act_param_logits), rnn_hxs
     
     def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False):
-        value_pred, (act_type_dist, act_param_dist), rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks)
+        value_pred, (act_type_logits, act_param_logits), rnn_hxs = self.forward(obs, rnn_hxs, rnn_masks)
+        bsz = act_param_logits[0].shape[0]
+        n_slot = act_param_logits[0].shape[1]
+        act_type_dist = Categorical(logits=act_type_logits)
         if deterministic:
             act_type = act_type_dist.probs.argmax(dim=-1, keepdim=True)
-            act_params = [act_param_dist[i].probs.argmax(dim=-1, keepdim=True) for i in range(len(act_param_dist))]
         else:
             act_type = act_type_dist.sample().unsqueeze(dim=-1)
+        # Choose corresponding slot for act_param
+        onehot = torch.zeros(bsz, n_slot).to(act_type_logits.device)
+        onehot.scatter_(1, act_type.long(), 1)
+        selected_param_logits = [(logit * onehot.unsqueeze(dim=-1).detach()).sum(dim=1) for logit in act_param_logits]
+        act_param_dist = [Categorical(logits=logit) for logit in selected_param_logits]
+        if deterministic:
+            act_params = [act_param_dist[i].probs.argmax(dim=-1, keepdim=True) for i in range(len(act_param_dist))]
+        else:
             act_params = [act_param_dist[i].sample().unsqueeze(dim=-1) for i in range(len(act_param_dist))]
         act_type_logprob = act_type_dist.log_prob(act_type.squeeze(dim=-1)).unsqueeze(dim=-1)
-        if self.use_param_mask:
-            use_param_mask = (act_type == 0).float().detach()
-        else:
-            use_param_mask = 1
         act_param_logprob = [
-            act_param_dist[i].log_prob(act_params[i].squeeze(dim=-1)).unsqueeze(dim=-1) * use_param_mask
+            act_param_dist[i].log_prob(act_params[i].squeeze(dim=-1)).unsqueeze(dim=-1)
             for i in range(self.act_dim)
         ]
         act_params = [2 * (act_param / (self.num_bin - 1.0)) - 1 for act_param in act_params]
@@ -153,8 +171,17 @@ class MvpStackingPolicy(ActorCriticPolicy):
         return value_pred, actions, log_prob, rnn_hxs
     
     def evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions):
-        _, (act_type_dist, act_param_dist), _ = self.forward(obs, rnn_hxs, rnn_masks)
+        _, (act_type_logits, act_param_logits), _ = self.forward(obs, rnn_hxs, rnn_masks)
+        bsz = act_param_logits[0].shape[0]
+        n_slot = act_param_logits[0].shape[1]
+        act_type_dist = Categorical(logits=act_type_logits)
         act_type = actions[:, 0].int()
+        # construct act param dist
+        onehot = torch.zeros(bsz, n_slot).to(act_type_logits.device)
+        onehot.scatter_(1, act_type.unsqueeze(dim=-1).long(), 1)
+        selected_param_logits = [(logit * onehot.unsqueeze(dim=-1).detach()).sum(dim=1) for logit in act_param_logits]
+        act_param_dist = [Categorical(logits=logit) for logit in selected_param_logits]
+
         act_params = torch.round((actions[:, 1:] + 1) / 2 * (self.num_bin - 1.0)).int()
         act_type_logprob = act_type_dist.log_prob(act_type)
         act_param_logprob = [
