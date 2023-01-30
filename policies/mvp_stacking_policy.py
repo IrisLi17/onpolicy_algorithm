@@ -65,7 +65,10 @@ class MvpStackingPolicy(ActorCriticPolicy):
         else:
             # TODO: use a transformer may be more appropriate
             if attn_value:
-                self.value_object_encode_linear = nn.Linear(8, 64)
+                self.value_object_encode_layer = nn.Sequential(
+                    nn.Linear(14, 64), nn.ReLU(), 
+                    nn.Linear(64, 64)
+                )
                 _encoder_layer = nn.TransformerEncoderLayer(
                     d_model=64, nhead=1, dim_feedforward=64, dropout=0.0,
                     ) # seq, batch, feature
@@ -127,16 +130,16 @@ class MvpStackingPolicy(ActorCriticPolicy):
         if not self.attn_value:
             value_pred = self.value_layers(proj_value_input)
         else:
-            obj_and_goals = proj_value_input.reshape((proj_value_input.shape[0], 2, -1, 7))
-            bsz = obj_and_goals.shape[0]
-            dtype = obj_and_goals.dtype
-            device = obj_and_goals.device
-            token_embed = torch.cat([
-                torch.zeros((bsz, 1, obj_and_goals.shape[2], 7), dtype=dtype, device=device),
-                torch.ones((bsz, 1, obj_and_goals.shape[2], 7), dtype=dtype, device=device)
-            ], dim=1)
-            obj_and_goals = torch.cat([obj_and_goals, token_embed], dim=-1).reshape((bsz, -1, 8)).transpose(0, 1)
-            obj_goal_embed = self.value_object_encode_linear(obj_and_goals)
+            bsz = proj_value_input.shape[0]
+            obj_and_goals = proj_value_input.reshape(
+                (bsz, 2, -1, 7)
+            ).permute((2, 0, 1, 3)).reshape((-1, bsz, 14))
+            # token_embed = torch.cat([
+            #     torch.zeros((bsz, 1, obj_and_goals.shape[2], 7), dtype=dtype, device=device),
+            #     torch.ones((bsz, 1, obj_and_goals.shape[2], 7), dtype=dtype, device=device)
+            # ], dim=1)
+            # obj_and_goals = torch.cat([obj_and_goals, token_embed], dim=-1).reshape((bsz, -1, 8)).transpose(0, 1)
+            obj_goal_embed = self.value_object_encode_layer(obj_and_goals)
             value_feature = self.value_attn_encoder(obj_goal_embed)
             value_pred = self.value_agg(torch.mean(value_feature, dim=0))
         
