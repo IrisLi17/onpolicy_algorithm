@@ -54,10 +54,11 @@ class PPO(object):
         self.expansion = OfflineExpansion(self.rollouts, self.env, self.policy)
 
     def learn(self, total_timesteps, callback=None):
+        task_nobj = 2
         if os.path.exists("distill_tasks.pkl"):
             with open("distill_tasks.pkl", "rb") as f:
                 new_tasks = pickle.load(f)
-            new_tasks = np.concatenate(new_tasks[0:6], axis=0) # start from 1,2 obj
+            new_tasks = np.concatenate(new_tasks[0:task_nobj], axis=0) # start from 1,2 obj
             task_idx = np.arange(new_tasks.shape[0])
             np.random.shuffle(task_idx)
             task_per_env = new_tasks.shape[0] // self.n_envs if (
@@ -67,7 +68,7 @@ class PPO(object):
                 self.env.env_method("add_tasks", new_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]], indices=i)
                 
         if self.warmup_dataset is not None:
-            self.il_warmup(self.warmup_dataset, n_epoch=30, eval_interval=2, batch_size=32)
+            self.il_warmup(self.warmup_dataset, n_epoch=30, eval_interval=5, batch_size=32)
         episode_rewards = deque(maxlen=1000)
         ep_infos = deque(maxlen=1000)
         obs = self.env.reset()
@@ -184,6 +185,19 @@ class PPO(object):
 
             self.rollouts.after_update()
 
+            if task_nobj < 6 and safe_mean([ep_info["is_success"] for ep_info in ep_infos]) > 0.8:
+                with open("distill_tasks.pkl", "rb") as f:
+                    new_tasks = pickle.load(f)
+                new_tasks = np.concatenate(new_tasks[task_nobj:6], axis=0) # start from 1,2 obj
+                task_nobj = 6
+                task_idx = np.arange(new_tasks.shape[0])
+                np.random.shuffle(task_idx)
+                task_per_env = new_tasks.shape[0] // self.n_envs if (
+                    new_tasks.shape[0] % self.n_envs) == 0 else new_tasks.shape[0] // self.n_envs + 1
+                print("tasks per env", task_per_env)
+                for i in range(self.n_envs):
+                    self.env.env_method("add_tasks", new_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]], indices=i)
+
     def il_warmup(self, dataset, train_value=False, n_epoch=15, batch_size=32, eval_interval=10):
         dataset["obs"] = torch.from_numpy(dataset["obs"]).float().to(self.device)
         dataset["action"] = torch.from_numpy(dataset["action"]).float().to(self.device)
@@ -191,7 +205,9 @@ class PPO(object):
         print("Num of samples", num_sample)
         indices = np.arange(num_sample)
         n_value_epoch = 5
+        n_aux_epoch = 20
         losses = dict(policy_loss=deque(maxlen=50), grad_norm=deque(maxlen=50), 
+                      aux_pos_loss=deque(maxlen=50), aux_rot_loss=deque(maxlen=50), 
                       param_norm=deque(maxlen=50), value_loss=deque(maxlen=50),
                       action_param_error=deque(maxlen=50), action_type_error=deque(maxlen=50))
         optimizer = optim.Adam([p[1] for p in self.policy.named_parameters() if not "log_std" in p[0]], lr=1e-3, weight_decay=0)
@@ -224,7 +240,7 @@ class PPO(object):
         success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)
         # print("Initial success episode: drawer %d / %d, object %d / %d" % (success_episodes[0], total_episodes[0], success_episodes[1], total_episodes[1]))
         print("Initial success episode: %d / %d" % (success_episodes, total_episodes))
-        for i in range(n_epoch):
+        for i in range(n_aux_epoch + n_epoch):
             np.random.shuffle(indices)
             for j in range(num_sample // batch_size):
                 mb_idx = indices[batch_size * j: batch_size * (j + 1)]
@@ -237,12 +253,16 @@ class PPO(object):
                 #     actions_batch)
                 # loss = -action_log_probs.mean()
                 loss = self.policy.get_bc_loss(obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch)
+                aux_pos_loss, aux_rot_loss = self.policy.get_aux_loss(obs_batch)
                 optimizer.zero_grad()
-                loss.backward()
-                grads = [p.grad for p in self.policy.parameters() if p.grad is not None]
-                device = grads[0].device
-                total_norm = torch.norm(torch.stack([torch.norm(g.detach(), 2).to(device) for g in grads]), 2)
-                # total_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+                if i < n_aux_epoch:
+                    (0 * loss + aux_pos_loss + 0.1 * aux_rot_loss).backward()
+                else:
+                    (loss + aux_pos_loss + 0.1 * aux_rot_loss).backward()
+                # grads = [p.grad for p in self.policy.parameters() if p.grad is not None]
+                # device = grads[0].device
+                # total_norm = torch.norm(torch.stack([torch.norm(g.detach(), 2).to(device) for g in grads]), 2)
+                total_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 optimizer.step()
                 with torch.no_grad():
                     _, pred_actions, pred_logprob, _ = self.policy.act(obs_batch, deterministic=True)
@@ -256,8 +276,10 @@ class PPO(object):
                     torch.norm(torch.stack([torch.norm(p.detach()) for p in self.policy.parameters()])).item()
                 )
                 losses["policy_loss"].append(loss.item())
+                losses["aux_pos_loss"].append(aux_pos_loss.item())
+                losses["aux_rot_loss"].append(aux_rot_loss.item())
                 losses["grad_norm"].append(total_norm.item())
-            if i % eval_interval == 0 or i == n_epoch - 1:
+            if i >= n_aux_epoch and (i % eval_interval == 0 or i == n_epoch - 1):
                 success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)
                 # print("Success episode: drawer %d / %d, object %d / %d" % (success_episodes[0], total_episodes[0], success_episodes[1], total_episodes[1]))
                 print("Success episode: %d / %d" % (success_episodes, total_episodes))
@@ -283,7 +305,7 @@ class PPO(object):
         advantages = (advantages - adv_mean) / (adv_std + 1e-5)
 
         losses = dict(value_loss=[], policy_loss=[], entropy=[], grad_norm=[], param_norm=[],
-                      clip_ratio=[])
+                      clip_ratio=[], aux_pos_loss=[], aux_rot_loss=[])
 
         for e in range(self.noptepochs):
             if self.policy.is_recurrent:
@@ -312,6 +334,7 @@ class PPO(object):
                                     1.0 + self.cliprange) * adv_targ
                 clipped_ratio = (torch.abs(ratio - 1) > self.cliprange).sum().item() / ratio.shape[0]
                 action_loss = -torch.min(surr1, surr2).mean()
+                aux_pos_loss, aux_rot_loss = self.policy.get_aux_loss(obs_batch)
 
                 values = self.policy.get_value(obs_batch, recurrent_hidden_states_batch, masks_batch)
                 if self.use_clipped_value_loss:
@@ -327,7 +350,7 @@ class PPO(object):
 
                 self.optimizer.zero_grad()
                 (value_loss * self.vf_coef + action_loss -
-                 dist_entropy * self.ent_coef).backward()
+                 dist_entropy * self.ent_coef + aux_pos_loss + 0.1 * aux_rot_loss).backward()
                 total_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 # print('total norm', total_norm)
                 self.optimizer.step()
@@ -356,6 +379,8 @@ class PPO(object):
 
                 losses["value_loss"].append(value_loss.item())
                 losses["policy_loss"].append(action_loss.item())
+                losses["aux_pos_loss"].append(aux_pos_loss.item())
+                losses["aux_rot_loss"].append(aux_rot_loss.item())
                 losses["entropy"].append(dist_entropy.item())
                 losses["grad_norm"].append(total_norm.item())
                 losses["param_norm"].append(param_norm.item())

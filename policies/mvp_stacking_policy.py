@@ -27,28 +27,35 @@ class MvpStackingPolicy(ActorCriticPolicy):
         # )
         self.mvp_projector = nn.Sequential(
             nn.LayerNorm(mvp_feat_dim, eps=1e-6),
-            # nn.Linear(mvp_feat_dim, proj_img_dim)
+            nn.Linear(mvp_feat_dim, proj_img_dim), nn.SELU(),
+            nn.Linear(proj_img_dim, 256), nn.SELU(),
+            nn.Linear(256, slot_dim // 2 * n_primitive), nn.SELU(),
         )
-        self.mvp_diff_projector = nn.Sequential(
-            nn.LayerNorm(mvp_feat_dim, eps=1e-6),
-            # nn.Linear(mvp_feat_dim, proj_img_dim)
-        )
+        # self.mvp_diff_projector = nn.Sequential(
+        #     nn.LayerNorm(mvp_feat_dim, eps=1e-6),
+        #     # nn.Linear(mvp_feat_dim, proj_img_dim)
+        # )
+        self.aux_predictor = nn.Linear(slot_dim // 2, 6)
         if not state_only_value:
             self.value_mvp_projector = nn.Linear(mvp_feat_dim, proj_img_dim)
         else:
             assert privilege_dim > 0
             self.value_mvp_projector = None
-        self.act_feature = nn.Sequential(
-            nn.Linear(2 * mvp_feat_dim, 2 * proj_img_dim), nn.SELU(),
-            nn.Linear(2 * proj_img_dim, 256), nn.SELU(),
-            nn.Linear(256, 256), nn.SELU()
-        )
-        self.act_feature_slots = nn.ModuleList([
-            nn.Sequential(
-                # nn.Linear(256, 256), nn.SELU(),
-                nn.Linear(256, slot_dim)
-            ) for _ in range(n_primitive)
-        ])
+        # self.act_feature = nn.Sequential(
+        #     nn.Linear(2 * mvp_feat_dim, 2 * proj_img_dim), nn.SELU(),
+        #     nn.Linear(2 * proj_img_dim, 256), nn.SELU(),
+        #     nn.Linear(256, 256), nn.SELU()
+        # )
+        # self.act_feature_slots = nn.ModuleList([
+        #     nn.Sequential(
+        #         # nn.Linear(256, 256), nn.SELU(),
+        #         nn.Linear(256, slot_dim)
+        #     ) for _ in range(n_primitive)
+        # ])
+        _slot_encoder_layer = nn.TransformerEncoderLayer(
+            d_model=slot_dim, nhead=1, dim_feedforward=slot_dim, dropout=0.0,
+        ) # seq, batch, feature
+        self.slot_attn_encoder = nn.TransformerEncoder(_slot_encoder_layer, num_layers=3)
         self.act_type = nn.Sequential(
             nn.Linear(slot_dim, 1)
         )
@@ -104,13 +111,19 @@ class MvpStackingPolicy(ActorCriticPolicy):
     def forward(self, obs, rnn_hxs=None, rnn_masks=None):
         cur_img_feat, goal_img_feat, privilege_info = self._obs_parser(obs)
         proj_cur_feat = self.mvp_projector(cur_img_feat)
-        proj_goal_feat = self.mvp_diff_projector(goal_img_feat - cur_img_feat)
-        proj_input = torch.cat([proj_cur_feat, proj_goal_feat], dim=-1)
+        # proj_goal_feat = self.mvp_diff_projector(goal_img_feat - cur_img_feat)
+        proj_goal_feat = self.mvp_projector(goal_img_feat)
+        # proj_input = torch.cat([proj_cur_feat, proj_goal_feat], dim=-1)
         # proj_input = self.mvp_double_projector(torch.cat([cur_img_feat, goal_img_feat - cur_img_feat], dim=-1))
-        proj_input = self.act_feature(proj_input)
-        act_slot_feature = torch.stack([
-            self.act_feature_slots[i](proj_input) for i in range(len(self.act_feature_slots))
-        ], dim=1)  # bsz, n_slot, slot_dim
+        # proj_input = self.act_feature(proj_input)
+        # act_slot_feature = torch.stack([
+        #     self.act_feature_slots[i](proj_input) for i in range(len(self.act_feature_slots))
+        # ], dim=1)  # bsz, n_slot, slot_dim
+        act_slot_feature = torch.cat([
+            proj_cur_feat.detach().view(proj_cur_feat.shape[0], self.n_primitive, -1),
+            proj_goal_feat.detach().view(proj_goal_feat.shape[0], self.n_primitive, -1)
+        ], dim=-1)  # bsz, n_slot, slot_dim
+        act_slot_feature = self.slot_attn_encoder(act_slot_feature.permute((1, 0, 2))).permute((1, 0, 2))
         # print("input std", torch.std(proj_input, dim=0).mean(), "input mean", torch.mean(proj_input))
         if self.value_mvp_projector is not None:
             value_proj_cur_feat = self.value_mvp_projector(cur_img_feat)
@@ -204,6 +217,33 @@ class MvpStackingPolicy(ActorCriticPolicy):
         loss = -torch.clamp(log_prob, max=-2).mean()
         # loss = -log_prob.mean()
         return loss
+    
+    def get_aux_loss(self, obs):
+        cur_img_feat, goal_img_feat, privilege_info = self._obs_parser(obs)
+        proj_cur_feat = self.mvp_projector(cur_img_feat)
+        proj_goal_feat = self.mvp_projector(goal_img_feat)
+        pred_cur_pose = self.aux_predictor(proj_cur_feat.view((proj_cur_feat.shape[0], self.n_primitive, -1)))
+        pred_goal_pose = self.aux_predictor(proj_goal_feat.view((proj_goal_feat.shape[0], self.n_primitive, -1)))
+        gt = privilege_info.view((privilege_info.shape[0], 2, self.n_primitive, 7))
+        gt_cur = gt[:, 0] # bsz, n_primitive, 7
+        gt_goal = gt[:, 1]
+        def quat_apply_batch(a, b):
+            xyz = a[..., :3]
+            t = torch.cross(xyz, b, dim=-1) * 2
+            return b + a[..., 3:] * t + torch.cross(xyz, t, dim=-1)
+        x_vec = torch.Tensor([1., 0., 0.]).float().to(obs.device).view((1, 1, 3))
+        gt_cur_vec = quat_apply_batch(gt_cur[:, :, 3:], x_vec.tile((gt_cur.shape[0], gt_cur.shape[1], 1)))
+        gt_goal_vec = quat_apply_batch(gt_goal[:, :, 3:], x_vec.tile((gt_goal.shape[0], gt_goal.shape[1], 1)))
+        pos_loss = torch.mean((pred_cur_pose[..., :3] - gt_cur[..., :3]).abs() + (pred_goal_pose[..., :3] - gt_goal[..., :3]).abs())
+        rot_loss = torch.mean(
+            1 - torch.abs(torch.nn.functional.cosine_similarity(pred_cur_pose[:, :, 3:], gt_cur_vec, dim=-1)) \
+                + 1 - torch.abs(torch.nn.functional.cosine_similarity(pred_goal_pose[:, :, 3:], gt_goal_vec, dim=-1))
+        )
+        rot_reg = torch.mean(
+            (torch.norm(pred_cur_pose[:, :, 3:], dim=-1) - 1) ** 2 + (torch.norm(pred_goal_pose[:, :, 3:], dim=-1) - 1) ** 2
+        )
+        rot_loss += rot_reg
+        return pos_loss, rot_loss
 
 
 # Categorical
