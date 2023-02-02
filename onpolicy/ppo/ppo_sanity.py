@@ -54,7 +54,7 @@ class PPO(object):
         self.expansion = OfflineExpansion(self.rollouts, self.env, self.policy)
 
     def learn(self, total_timesteps, callback=None):
-        task_nobj = 2
+        task_nobj = 6
         if os.path.exists("distill_tasks.pkl"):
             with open("distill_tasks.pkl", "rb") as f:
                 new_tasks = pickle.load(f)
