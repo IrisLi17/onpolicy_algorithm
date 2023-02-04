@@ -20,7 +20,7 @@ class MvpStackingPolicy(ActorCriticPolicy):
         self.act_dim = act_dim
         self.num_bin = num_bin
         self.attn_value = attn_value
-        slot_dim = 48
+        slot_dim = 64
         # self.mvp_double_projector = nn.Sequential(
         #     nn.LayerNorm(mvp_feat_dim * 2, eps=1e-6),
         #     nn.Linear(mvp_feat_dim * 2, proj_img_dim * 2)
@@ -119,11 +119,11 @@ class MvpStackingPolicy(ActorCriticPolicy):
         # act_slot_feature = torch.stack([
         #     self.act_feature_slots[i](proj_input) for i in range(len(self.act_feature_slots))
         # ], dim=1)  # bsz, n_slot, slot_dim
-        act_slot_feature = torch.cat([
+        interm_act_slot_feature = torch.cat([
             proj_cur_feat.detach().view(proj_cur_feat.shape[0], self.n_primitive, -1),
             proj_goal_feat.detach().view(proj_goal_feat.shape[0], self.n_primitive, -1)
         ], dim=-1)  # bsz, n_slot, slot_dim
-        act_slot_feature = self.slot_attn_encoder(act_slot_feature.permute((1, 0, 2))).permute((1, 0, 2))
+        act_slot_feature = self.slot_attn_encoder(interm_act_slot_feature.permute((1, 0, 2))).permute((1, 0, 2))
         # print("input std", torch.std(proj_input, dim=0).mean(), "input mean", torch.mean(proj_input))
         if self.value_mvp_projector is not None:
             value_proj_cur_feat = self.value_mvp_projector(cur_img_feat)

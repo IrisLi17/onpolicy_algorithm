@@ -20,6 +20,7 @@ def evaluate(env, policy, n_episode, task_file="generated_tasks_0.pkl"):
     episode_count = 0
     frame_count = 0
     obs = env.reset()
+    feat_dim = env.get_attr("feature_dim")[0]
     print("goal state", env.get_attr("goal_dict")[0]["full_state"])
     goal_img = env.env_method("get_goal_image")[0]
     episode_reward = 0
@@ -40,9 +41,10 @@ def evaluate(env, policy, n_episode, task_file="generated_tasks_0.pkl"):
         plt.imsave("tmp/tmp%d.png" % frame_count, np.concatenate([img, goal_img], axis=1))
         plt.pause(0.01)
         with torch.no_grad():
-            _, actions, _, _ = policy.act(obs, deterministic=False)
+            value_pred, actions, _, _ = policy.act(obs, deterministic=False)
         # if frame_count == reset_step:
         #     print("action at reset step", actions)
+        print("value", value_pred[0])
         obs, reward, done, info = env.step(actions)
         episode_reward += reward[0]
         episode_length += 1
@@ -56,7 +58,7 @@ def evaluate(env, policy, n_episode, task_file="generated_tasks_0.pkl"):
             img = env.render(mode="rgb_array")
             plt.imsave("tmp/tmp%d.png" % frame_count, np.concatenate([img, goal_img], axis=1))
             frame_count += 1
-            print("terminal obs", info[0]["terminal_observation"][768 * 2 + 7:].reshape(2, -1))
+            print("terminal obs", info[0]["terminal_observation"][feat_dim * 2 + 7:].reshape(2, -1))
             print(episode_count, "episode reward", episode_reward, "episode length", episode_length)
             obs = env.reset()
             print("goal", env.get_attr("goal_dict")[0]["full_state"])
@@ -154,14 +156,18 @@ def evaluate_tasks(env, policy, task_file="test_tasks.pkl"):
     print("task per env", task_per_env)
     for i in range(env.num_envs):
         env.env_method("add_tasks", new_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]])
+    # env.env_method("set_dist_threshold", 0.08)
     n_episode = 0
     n_success = 0
     detail_stats = [[0, 0] for _ in range(7)]
     obs = env.reset()
     n_to_move = env.env_method("oracle_feasible", obs.detach().cpu().numpy())[0][0]
-    while n_episode < 100:
+    while n_episode < 500:
         with torch.no_grad():
             _, actions, _, _ = policy.act(obs, deterministic=False)
+        with torch.no_grad():
+            aux_pos_loss, aux_rot_loss = policy.get_aux_loss(obs)
+        print("aux pos loss", aux_pos_loss, "aux rot loss", aux_rot_loss)
         obs, reward, done, info = env.step(actions)
         if done[0]:
             n_success += info[0]["is_success"]
