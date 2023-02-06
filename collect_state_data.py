@@ -7,10 +7,10 @@ import os, shutil
 import numpy as np
 import pybullet as p
 import pickle
-# import sys
-# sys.path.append("../stacking_env")
-# from bullet_envs.env.pixel_stacking import get_n_to_move
-# sys.path.remove("../stacking_env")
+import sys
+sys.path.append("../stacking_env")
+from bullet_envs.utils.image_processor import ImageProcessor
+sys.path.remove("../stacking_env")
 
 
 class StackingObsParser(object):
@@ -94,29 +94,29 @@ class StackingObsParser(object):
         return q
 
 
-class ImageProcessor(object):
-    def __init__(self) -> None:
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        import mvp
-        import torchvision.transforms
-        self.mvp_model = mvp.load("vitb-mae-egosoup")
-        self.mvp_model.to(self.device)
-        self.mvp_model.freeze()
-        # Norm should still be trainable, so I will not forward norm in this wrapper, and add a ln to policy
-        self.image_transform = torchvision.transforms.Resize(224)
-        self.im_mean = torch.Tensor([0.485, 0.456, 0.406]).reshape((1, 3, 1, 1)).to(self.device)
-        self.im_std = torch.Tensor([0.229, 0.224, 0.225]).reshape((1, 3, 1, 1)).to(self.device)
+# class ImageProcessor(object):
+#     def __init__(self) -> None:
+#         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#         import mvp
+#         import torchvision.transforms
+#         self.mvp_model = mvp.load("vitb-mae-egosoup")
+#         self.mvp_model.to(self.device)
+#         self.mvp_model.freeze()
+#         # Norm should still be trainable, so I will not forward norm in this wrapper, and add a ln to policy
+#         self.image_transform = torchvision.transforms.Resize(224)
+#         self.im_mean = torch.Tensor([0.485, 0.456, 0.406]).reshape((1, 3, 1, 1)).to(self.device)
+#         self.im_std = torch.Tensor([0.229, 0.224, 0.225]).reshape((1, 3, 1, 1)).to(self.device)
     
-    def _normalize_obs(self, obs):
-        img = self.image_transform(torch.from_numpy(obs).float().to(self.device))
-        normed_img = (img / 255.0 - self.im_mean) / self.im_std
-        return normed_img
-    
-    def process_obs(self, obs):
-        normed_img = self._normalize_obs(obs)
-        with torch.no_grad():
-            scene_feat = self.mvp_model.extract_feat(normed_img.float())
-        return scene_feat
+#     def _normalize_obs(self, obs):
+#         img = self.image_transform(torch.from_numpy(obs).float().to(self.device))
+#         normed_img = (img / 255.0 - self.im_mean) / self.im_std
+#         return normed_img
+        
+#     def process_obs(self, obs):
+#         normed_img = self._normalize_obs(obs)
+#         with torch.no_grad():
+#             scene_feat = self.mvp_model.extract_feat(normed_img.float())
+#         return scene_feat
 
 
 def main(args):
@@ -142,6 +142,7 @@ def main(args):
                 primitive=True,
                 generate_data=True,
                 use_expand_goal_prob=1,
+                expand_task_path=args.expand_task,
                 # action_dim=5,
             ),
         ),
@@ -168,15 +169,17 @@ def main(args):
     obs_parser = config["obs_parser"]
     policy = AttentionDiscretePolicy(obs_parser, env.action_space.shape[0], **config["policy"])
     policy.to(device)
-    checkpoint = torch.load(args.load_path, map_location=device)
-    policy.load_state_dict(checkpoint['policy'])
+    if args.load_path is not None:
+        checkpoint = torch.load(args.load_path, map_location=device)
+        policy.load_state_dict(checkpoint['policy'])
 
-    image_processor = ImageProcessor()
+    image_processor = ImageProcessor(device)
     # if os.path.exists("tmp"):
     #     shutil.rmtree("tmp")
     # os.makedirs("tmp")
-    # create_generalize_task(env, image_processor, 1000)
-    collect_data(env, policy, image_processor, 10_000, balance=False)
+    # create_generalize_task(env, image_processor, 1000, use_patch_feat=False, use_raw_img=True)
+    # create_canonical_view(env, image_processor, use_patch_feat=False, use_raw_img=True)
+    collect_data(env, policy, image_processor, 10_000, balance=False, round_idx=args.round_idx, use_patch_feat=False, use_raw_img=True)
     # create test tasks
 
     return
@@ -198,7 +201,9 @@ def main(args):
             episode_count += 1
 
 
-def collect_data(env, policy, image_processor, desired_num, balance):
+def collect_data(env, policy, image_processor, desired_num, balance, round_idx, use_patch_feat, use_raw_img):
+    if os.path.exists("distill_dataset_stacking_raw_expand%d.pkl" % round_idx):
+        os.remove("distill_dataset_stacking_raw_expand%d.pkl" % round_idx)
     assert env.get_attr("use_expand_goal_prob")[0] == 1
     device = image_processor.device
     n_object = 6
@@ -229,7 +234,8 @@ def collect_data(env, policy, image_processor, desired_num, balance):
                     # exit()
                     traj_states = np.stack(traj_buffer[i]["state"], axis=0)
                     traj_images = np.stack(traj_buffer[i]["img"], axis=0)
-                    traj_features = image_processor.process_obs(traj_images).detach().cpu().numpy()
+                    traj_features = image_processor.mvp_process_image(
+                        traj_images, use_patch_feat=use_patch_feat, use_raw_img=use_raw_img).detach().cpu().numpy()
                     robot_obs, objects_obs = policy.obs_parser.bridge(traj_states)
                     for goal_idx in range(len(traj_buffer[i]["action"]), len(traj_buffer[i]["action"]) + 1):
                         goal_feature = traj_features[goal_idx:goal_idx + 1]
@@ -243,10 +249,10 @@ def collect_data(env, policy, image_processor, desired_num, balance):
                         # n_to_move = get_n_to_move(new_obs[0:1], n_object, 0.05, 0.75)[0]
                         n_to_move = len(set([int(traj_buffer[i]["action"][j][0]) for j in range(goal_idx)]))
                         if (not balance) or (balance and len(task_arrays[n_to_move - 1]) < desired_num / n_object):
-                            im_dataset[n_to_move - 1]["obs"].append(new_obs)
-                            im_dataset[n_to_move - 1]["action"].append(np.stack(traj_buffer[i]["action"][:goal_idx], axis=0).astype(np.float32))
-                            im_dataset[n_to_move - 1]["boundary"].append(n_data[n_to_move - 1])
-                            assert im_dataset[n_to_move - 1]["obs"][-1].shape[0] == im_dataset[n_to_move - 1]["action"][-1].shape[0]
+                            # im_dataset[n_to_move - 1]["obs"].append(new_obs)
+                            # im_dataset[n_to_move - 1]["action"].append(np.stack(traj_buffer[i]["action"][:goal_idx], axis=0).astype(np.float32))
+                            # im_dataset[n_to_move - 1]["boundary"].append(n_data[n_to_move - 1])
+                            # assert im_dataset[n_to_move - 1]["obs"][-1].shape[0] == im_dataset[n_to_move - 1]["action"][-1].shape[0]
                             n_data[n_to_move - 1] += new_obs.shape[0]
                             # print(n_data)
                             # get task array
@@ -254,32 +260,39 @@ def collect_data(env, policy, image_processor, desired_num, balance):
                                 robot_obs[0], objects_obs[0], objects_obs[goal_idx], traj_features[goal_idx]
                             ])
                             task_arrays[n_to_move - 1].append(task_array)
+                            with open("distill_dataset_stacking_raw_expand%d.pkl" % round_idx, "ab") as f:
+                                pickle.dump({"obs": new_obs, "action": np.stack(traj_buffer[i]["action"][:goal_idx], axis=0).astype(np.float32)}, f)
                     print(sum([len(task_arrays[i]) for i in range(n_object)]), sum(n_data))
                 reset_img = env.env_method("render", indices=i)[0]
                 traj_buffer[i] = dict(
                     img=[reset_img.astype(np.uint8)], state=[obs[i].detach().cpu().numpy()], action=[]
                 )
     for i in range(n_object):
-        im_dataset[i]["obs"] = np.concatenate(im_dataset[i]["obs"], axis=0)
-        im_dataset[i]["action"] = np.concatenate(im_dataset[i]["action"], axis=0)
-        im_dataset[i]["boundary"] = np.array(im_dataset[i]["boundary"])
-        task_arrays[i] = np.stack(task_arrays[i], axis=0)
+        print("N to move", i + 1, "count", len(task_arrays[i]))
     for i in range(n_object):
-        print("N to move", i + 1, "count", im_dataset[i]["boundary"].shape[0])
-    with open("distill_dataset_stacking%s.pkl" % ("_balance" if balance else ""), "wb") as f:
-        pickle.dump(im_dataset, f)
-    with open("distill_tasks%s.pkl" % ("_balance" if balance else ""), "wb") as f:
+        # im_dataset[i]["obs"] = np.concatenate(im_dataset[i]["obs"], axis=0)
+        # im_dataset[i]["action"] = np.concatenate(im_dataset[i]["action"], axis=0)
+        # im_dataset[i]["boundary"] = np.array(im_dataset[i]["boundary"])
+        task_arrays[i] = np.stack(task_arrays[i], axis=0)
+        # obs_shape = im_dataset[i]["obs"].shape[1]
+        # action_shape = im_dataset[i]["action"].shape[1]
+        # task_shape = task_arrays[i].shape[1]
+    # with open("distill_dataset_stacking_raw_expand%d%s.pkl" % (round_idx, "_balance" if balance else ""), "wb") as f:
+    #     pickle.dump(im_dataset, f)
+    with open("distill_tasks_raw_expand%d%s.pkl" % (round_idx, "_balance" if balance else ""), "wb") as f:
         pickle.dump(task_arrays, f)
 
 
-def create_generalize_task(env, image_processor, desired_num):
+def create_generalize_task(env, image_processor, desired_num, use_patch_feat, use_raw_img):
     all_task_arrays = []
     all_state_task_trajs = []
     count = 0
     while count < desired_num:
         tasks = env.env_method("create_generalize_task")
         robot_obs, init_states, goal_states, goal_images = map(lambda x: np.array(x), zip(*tasks))
-        goal_feat = image_processor.process_obs(goal_images).cpu().numpy()
+        goal_feat = image_processor.mvp_process_image(
+            goal_images, use_patch_feat=use_patch_feat, use_raw_img=use_raw_img
+        ).cpu().numpy()
         task_arrays = np.concatenate([robot_obs, init_states, goal_states, goal_feat], axis=-1)
         all_task_arrays.append(task_arrays)
         count += task_arrays.shape[0]
@@ -314,9 +327,18 @@ def create_generalize_task(env, image_processor, desired_num):
     with open("test_state_tasks.pkl", "wb") as f:
         pickle.dump({"expansion": all_state_task_trajs}, f)
 
+def create_canonical_view(env, image_processor, use_patch_feat, use_raw_img):
+    images = np.array(env.env_method("create_canonical_view")[0])
+    image_feat = image_processor.mvp_process_image(
+        images, use_patch_feat=use_patch_feat, use_raw_img=use_raw_img).cpu().numpy()
+    print(images.shape, image_feat.shape)
+    with open("canonical_view.pkl", "wb") as f:
+        pickle.dump(image_feat, f)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--load_path", type=str, default=None)
+    parser.add_argument("--expand_task", type=str, default="primitive_cuboid_expand5.pkl")
+    parser.add_argument("--round_idx", type=int)
     args = parser.parse_args()
     main(args)

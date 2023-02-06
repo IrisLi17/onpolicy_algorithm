@@ -54,21 +54,10 @@ class PPO(object):
         self.expansion = OfflineExpansion(self.rollouts, self.env, self.policy)
 
     def learn(self, total_timesteps, callback=None):
-        task_nobj = 6
-        if os.path.exists("distill_tasks.pkl"):
-            with open("distill_tasks.pkl", "rb") as f:
-                new_tasks = pickle.load(f)
-            new_tasks = np.concatenate(new_tasks[0:task_nobj], axis=0) # start from 1,2 obj
-            task_idx = np.arange(new_tasks.shape[0])
-            np.random.shuffle(task_idx)
-            task_per_env = new_tasks.shape[0] // self.n_envs if (
-                new_tasks.shape[0] % self.n_envs) == 0 else new_tasks.shape[0] // self.n_envs + 1
-            print("tasks per env", task_per_env)
-            for i in range(self.n_envs):
-                self.env.env_method("add_tasks", new_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]], indices=i)
-                
-        if self.warmup_dataset is not None:
-            self.il_warmup(self.warmup_dataset, n_epoch=30, eval_interval=5, batch_size=32)
+        data_rounds = [5,]
+        rl_start_update = 0
+        self.set_task_and_il(data_rounds)
+        
         episode_rewards = deque(maxlen=1000)
         ep_infos = deque(maxlen=1000)
         obs = self.env.reset()
@@ -185,56 +174,63 @@ class PPO(object):
 
             self.rollouts.after_update()
 
-            if task_nobj < 6 and safe_mean([ep_info["is_success"] for ep_info in ep_infos]) > 0.8:
-                with open("distill_tasks.pkl", "rb") as f:
-                    new_tasks = pickle.load(f)
-                new_tasks = np.concatenate(new_tasks[task_nobj:6], axis=0) # start from 1,2 obj
-                task_nobj = 6
-                task_idx = np.arange(new_tasks.shape[0])
-                np.random.shuffle(task_idx)
-                task_per_env = new_tasks.shape[0] // self.n_envs if (
-                    new_tasks.shape[0] % self.n_envs) == 0 else new_tasks.shape[0] // self.n_envs + 1
-                print("tasks per env", task_per_env)
-                for i in range(self.n_envs):
-                    self.env.env_method("add_tasks", new_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]], indices=i)
+            # if data_round < 5 and safe_mean([ep_info["is_success"] for ep_info in ep_infos]) > 0.8 or (j - rl_start_update > 100):
+            #     data_round += 1
+            #     rl_start_update = j
+            #     self.set_task_and_il(data_round)
 
-    def il_warmup(self, dataset, train_value=False, n_epoch=15, batch_size=32, eval_interval=10):
+    def set_task_and_il(self, data_rounds: list):
+        self.env.env_method("clear_tasks")
+        total_tasks = []
+        for data_round in [5]:
+            with open("distill_tasks_raw_expand%d.pkl" % data_round, "rb") as f:
+                new_tasks = pickle.load(f)
+            if isinstance(new_tasks, list):
+                total_tasks.extend(new_tasks)
+            else:
+                total_tasks.append(new_tasks)
+        total_tasks = np.concatenate(total_tasks, axis=0)
+        task_idx = np.arange(total_tasks.shape[0])
+        np.random.shuffle(task_idx)
+        task_per_env = total_tasks.shape[0] // self.n_envs if (
+            total_tasks.shape[0] % self.n_envs) == 0 else total_tasks.shape[0] // self.n_envs + 1
+        print("tasks per env", task_per_env)
+        for i in range(self.n_envs):
+            self.env.env_method("add_tasks", total_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]], indices=i)        
+        
+        total_dataset = []
+        for data_round in data_rounds:
+            with open("distill_dataset_stacking_raw_expand%d.pkl" % data_round, "rb") as f:
+                try:
+                    while True:
+                        dataset = pickle.load(f)
+                        if isinstance(dataset, list):
+                            total_dataset.extend(dataset)
+                        else:
+                            total_dataset.append(dataset)
+                except EOFError:
+                    pass
+        il_dataset = dict()
+        for k in total_dataset[0].keys():
+            il_dataset[k] = np.concatenate([total_dataset[i][k] for i in range(len(total_dataset))], axis=0) 
+        self.il_warmup(
+            il_dataset, n_epoch=30, eval_interval=5, batch_size=32, 
+            n_aux_epoch=0
+        )
+
+    def il_warmup(self, dataset, train_value=False, n_epoch=15, batch_size=32, eval_interval=10, n_aux_epoch=0):
         dataset["obs"] = torch.from_numpy(dataset["obs"]).float().to(self.device)
         dataset["action"] = torch.from_numpy(dataset["action"]).float().to(self.device)
         num_sample = dataset["obs"].shape[0]
         print("Num of samples", num_sample)
         indices = np.arange(num_sample)
         n_value_epoch = 5
-        n_aux_epoch = 20
         losses = dict(policy_loss=deque(maxlen=50), grad_norm=deque(maxlen=50), 
                       aux_pos_loss=deque(maxlen=50), aux_rot_loss=deque(maxlen=50), 
                       param_norm=deque(maxlen=50), value_loss=deque(maxlen=50),
                       action_param_error=deque(maxlen=50), action_type_error=deque(maxlen=50))
         optimizer = optim.Adam([p[1] for p in self.policy.named_parameters() if not "log_std" in p[0]], lr=1e-3, weight_decay=0)
         # self.save(os.path.join(logger.get_dir(), "model_init.pt"))
-        
-        if train_value:
-            target_returns = torch.from_numpy(self.compute_discounted_reward(dataset["boundary"] + [dataset["obs"].shape[0]])).unsqueeze(dim=-1).float().to(self.device)
-            # TODO: get negative samples? cross sample the goals
-            original_goal_img = dataset["terminate_obs"][:, 768 + 14: 768 * 2 + 14]
-            original_goal_info = torch.cat([dataset["terminate_obs"][:, -7: -6], dataset["terminate"][:, -3:]], dim=-1)
-            # shuffled_idx = 
-            
-            for i in range(n_value_epoch):
-                np.random.shuffle(indices)
-                for j in range(num_sample // batch_size):
-                    mb_idx = indices[batch_size * j: batch_size * (j + 1)]
-                    obs_batch = dataset["obs"][mb_idx]
-                    return_batch = target_returns[mb_idx]
-                    recurrent_hidden_states_batch = torch.zeros((obs_batch.shape[0], 1))
-                    masks_batch = torch.ones((obs_batch.shape[0], 1))
-                    pred_value = self.policy.get_value(obs_batch, recurrent_hidden_states_batch, masks_batch)
-                    loss = torch.mean((pred_value - return_batch) ** 2)
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-                    losses["value_loss"].append(loss.item())
-                print("Value epoch", i, "Value loss", np.mean(losses["value_loss"]))
                 
         from utils.evaluation import evaluate_fixed_states
         success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)
@@ -283,6 +279,7 @@ class PPO(object):
                 success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)
                 # print("Success episode: drawer %d / %d, object %d / %d" % (success_episodes[0], total_episodes[0], success_episodes[1], total_episodes[1]))
                 print("Success episode: %d / %d" % (success_episodes, total_episodes))
+                logger.logkv("il_sr", success_episodes / total_episodes)
                 # self.save(os.path.join(logger.get_dir(), "model_init%d.pt" % i))
             logger.logkv("epoch", i)
             for k in losses:

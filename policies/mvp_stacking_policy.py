@@ -246,6 +246,177 @@ class MvpStackingPolicy(ActorCriticPolicy):
         return pos_loss, rot_loss
 
 
+class MvpPatchPolicy(ActorCriticPolicy):
+    def __init__(self, canonical_file, embed_dim, act_dim, num_bin, privilege_dim) -> None:
+        super().__init__()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.canonical_file = canonical_file
+        import pickle
+        with open(canonical_file, "rb") as f:
+            canonical_img = pickle.load(f)
+        self.image_dim = 3 * 128 * 128
+        self.img_size = int(np.sqrt(self.image_dim / 3))
+        patch_size = 32
+        canonical_img = np.reshape(canonical_img, (-1, 3, patch_size, patch_size))
+        self.canonical_img = torch.from_numpy(canonical_img).float().to(device)
+        self.robot_state_dim = 7
+        self.privilege_dim = privilege_dim
+        self.act_dim = act_dim
+        self.num_bin = num_bin
+        import matplotlib.pyplot as plt
+        for i in range(canonical_img.shape[0]):
+            plt.imsave("tmp/tmp%d.png" % i, canonical_img[i].transpose((1, 2, 0)).astype(np.uint8))
+        self.conv1 = nn.Conv2d(
+            in_channels=3, out_channels=embed_dim, kernel_size=patch_size,
+            stride=patch_size, bias=False
+        )
+        assert self.img_size % patch_size == 0
+        self.n_patch = n_patch = int((self.img_size / patch_size) ** 2)
+        self.n_obj = canonical_img.shape[0]
+        scale = np.sqrt(embed_dim)
+        self.position_embedding = nn.Parameter(scale * torch.randn(1 + 2 * n_patch, embed_dim))
+        self.ln_pre = nn.LayerNorm(embed_dim)
+
+        self.slot_attn_mask = torch.zeros(
+            (2 * n_patch + canonical_img.shape[0], 2 * n_patch + self.n_obj), 
+            dtype=torch.bool, device=device
+        )
+        self.slot_attn_mask[:, -canonical_img.shape[0]:] = 1
+        self.slot_attn_mask.fill_diagonal_(0)
+        
+        _slot_encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim, nhead=1, dim_feedforward=embed_dim, dropout=0.0, batch_first=True
+        ) # batch, seq, feature
+        self.slot_attn_encoder = nn.TransformerEncoder(_slot_encoder_layer, num_layers=3)
+        
+        self.aux_predictor = nn.Linear(embed_dim, 12)
+        self.act_type = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim), nn.ReLU(),
+            nn.Linear(embed_dim, 1)
+        )
+        self.act_param = nn.ModuleList([nn.Sequential(
+            nn.Linear(embed_dim, embed_dim), nn.ReLU(),
+            nn.Linear(embed_dim, num_bin)
+        ) for _ in range(act_dim)])
+        self.value_object_encode_layer = nn.Sequential(
+            nn.Linear(14, 64), nn.ReLU(), 
+            nn.Linear(64, 64)
+        )
+        _encoder_layer = nn.TransformerEncoderLayer(
+            d_model=64, nhead=1, dim_feedforward=64, dropout=0.0,
+            ) # seq, batch, feature
+        self.value_attn_encoder = nn.TransformerEncoder(_encoder_layer, num_layers=3)
+        self.value_agg = nn.Linear(64, 1)
+        self.is_recurrent = False
+        self.recurrent_hidden_state_size = 1
+        # MvpStackingPolicy.init_weights(self.act_type, [0.01])
+        # for i in range(act_dim):
+        #     MvpStackingPolicy.init_weights(self.act_param[i], [0.01])
+
+    def _normalize_img(self, x):
+        x = x / 255.0
+        im_mean = torch.Tensor([0.485, 0.456, 0.406]).reshape((1, 3, 1, 1)).to(x.device)
+        im_std = torch.Tensor([0.229, 0.224, 0.225]).reshape((1, 3, 1, 1)).to(x.device)
+        return (x - im_mean) / im_std
+
+    def _obs_parser(self, obs):
+        # convert to patch feat
+        cur_img = torch.narrow(obs, dim=-1, start=0, length=self.image_dim).reshape(
+            obs.shape[0], 3, self.img_size, self.img_size
+        )
+        goal_img = torch.narrow(obs, dim=-1, start=self.image_dim + self.robot_state_dim, length=self.image_dim).reshape(
+            obs.shape[0], 3, self.img_size, self.img_size
+        )
+        privilege_info = torch.narrow(obs, dim=-1, start=2 * self.image_dim + self.robot_state_dim, length=self.privilege_dim)
+        # cur_patch_feat = self.mvp_processor.mvp_process_image(cur_img_feat, use_patch_feat=True)
+        # goal_patch_feat = self.mvp_processor.mvp_process_image(goal_img_feat, use_patch_feat=True)
+        # # TODO: fewer patches
+        # cur_patch_feat = cur_patch_feat.reshape(
+        #     cur_patch_feat.shape[0], 7, 2, 7, 2, cur_patch_feat.shape[-1]
+        # ).permute(0, 1, 3, 2, 4, 5).reshape(
+        #     cur_patch_feat.shape[0], 7, 7, 4, cur_patch_feat.shape[-1]
+        # ).mean(dim=3).reshape(
+        #     cur_patch_feat.shape[0], 49, cur_patch_feat.shape[-1]
+        # )
+        # goal_patch_feat = goal_patch_feat.reshape(
+        #     goal_patch_feat.shape[0], 7, 2, 7, 2, goal_patch_feat.shape[-1]
+        # ).permute(0, 1, 3, 2, 4, 5).reshape(
+        #     goal_patch_feat.shape[0], 7, 7, 4, goal_patch_feat.shape[-1]
+        # ).mean(dim=3).reshape(
+        #     goal_patch_feat.shape[0], 49, goal_patch_feat.shape[-1]
+        # )
+        return cur_img.detach(), goal_img.detach(), privilege_info.detach()
+    
+    def _forward_object_feat(self, obs):
+        bsz = obs.shape[0]
+        cur_img, goal_img, privilege_info = self._obs_parser(obs)
+        cur_patch_feat = self.conv1.forward(self._normalize_img(cur_img)) # bsz, emb_dim, 4, 4
+        cur_patch_feat = cur_patch_feat.reshape(bsz, cur_patch_feat.shape[1], -1).transpose(1, 2) # bsz, n_patch, emb
+        goal_patch_feat = self.conv1.forward(self._normalize_img(goal_img))
+        goal_patch_feat = goal_patch_feat.reshape(bsz, goal_patch_feat.shape[1], -1).transpose(1, 2) # bsz, n_patch, emb
+        canonical_patch = self.conv1.forward(self._normalize_img(self.canonical_img)).reshape(1, self.n_obj, -1).tile(bsz, 1, 1) # bsz, n_obj, emb
+        cur_patch_feat = cur_patch_feat + self.position_embedding[:self.n_patch]
+        goal_patch_feat = goal_patch_feat + self.position_embedding[self.n_patch: 2 * self.n_patch]
+        canonical_patch = canonical_patch + self.position_embedding[-1:]
+        input_patches = torch.cat([cur_patch_feat, goal_patch_feat, canonical_patch], dim=1)
+        input_patches = self.ln_pre(input_patches)
+
+        act_slot_feature = self.slot_attn_encoder.forward(input_patches, mask=self.slot_attn_mask)
+        act_slot_feature = act_slot_feature[:, -self.n_obj:, :]
+        return act_slot_feature
+    
+    def forward(self, obs, rnn_hxs=None, rnn_masks=None):
+        bsz = obs.shape[0]
+        cur_img, goal_img, privilege_info = self._obs_parser(obs)
+        act_slot_feature = self._forward_object_feat(obs)
+
+        act_type_logits = self.act_type(act_slot_feature).squeeze(dim=-1) # bsz, n_obj
+        act_param_logits = [self.act_param[i](act_slot_feature) for i in range(len(self.act_param))]
+        obj_and_goals = privilege_info.reshape(
+            (bsz, 2, -1, 7)
+        ).permute((2, 0, 1, 3)).reshape((-1, bsz, 14))
+        obj_goal_embed = self.value_object_encode_layer(obj_and_goals)
+        value_feature = self.value_attn_encoder(obj_goal_embed)
+        value_pred = self.value_agg(torch.mean(value_feature, dim=0))
+        return value_pred, (act_type_logits, act_param_logits), rnn_hxs
+    
+    def act(self, obs, rnn_hxs=None, rnn_masks=None, deterministic=False):
+        return MvpStackingPolicy.act(self, obs, rnn_hxs, rnn_masks, deterministic)
+    
+    def evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions):
+        return MvpStackingPolicy.evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions)
+    
+    def get_bc_loss(self, obs, rnn_hxs, rnn_masks, actions):
+        return MvpStackingPolicy.get_bc_loss(self, obs, rnn_hxs, rnn_masks, actions)
+    
+    def get_aux_loss(self, obs):
+        _, _, privilege_info = self._obs_parser(obs)
+        act_slot_feature = self._forward_object_feat(obs)
+        aux_pred = self.aux_predictor(act_slot_feature)
+        gt = privilege_info.view((privilege_info.shape[0], 2, self.n_obj, 7))
+        gt_cur = gt[:, 0] # bsz, n_primitive, 7
+        gt_goal = gt[:, 1]
+        def quat_apply_batch(a, b):
+            xyz = a[..., :3]
+            t = torch.cross(xyz, b, dim=-1) * 2
+            return b + a[..., 3:] * t + torch.cross(xyz, t, dim=-1)
+        x_vec = torch.Tensor([1., 0., 0.]).float().to(obs.device).view((1, 1, 3))
+        gt_cur_vec = quat_apply_batch(gt_cur[:, :, 3:], x_vec.tile((gt_cur.shape[0], gt_cur.shape[1], 1)))
+        gt_goal_vec = quat_apply_batch(gt_goal[:, :, 3:], x_vec.tile((gt_goal.shape[0], gt_goal.shape[1], 1)))
+        gt_pos = torch.cat([gt_cur[:, :, :3], gt_goal[:, :, :3]], dim=-1)
+        gt_rot = torch.cat([gt_cur_vec, gt_goal_vec], dim=-1)
+        pos_loss = torch.mean((aux_pred[..., :6] - gt_pos).abs())
+        rot_loss = torch.mean(
+            1 - torch.abs(torch.nn.functional.cosine_similarity(aux_pred[:, :, 6:9], gt_rot[..., :3], dim=-1)) \
+                + 1 - torch.abs(torch.nn.functional.cosine_similarity(aux_pred[:, :, 9:], gt_rot[..., 3:], dim=-1))
+        )
+        rot_reg = torch.mean(
+            (torch.norm(aux_pred[:, :, 6:9], dim=-1) - 1) ** 2 + (torch.norm(aux_pred[:, :, 9:], dim=-1) - 1) ** 2
+        )
+        rot_loss += rot_reg
+
+        return pos_loss, rot_loss
+
 # Categorical
 class FixedCategorical(torch.distributions.Categorical):
     def sample(self):
