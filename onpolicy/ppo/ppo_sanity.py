@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 from utils import logger
 from vec_env.base_vec_env import VecEnv
-from onpolicy.storage import RolloutStorage
+from onpolicy.storage import RolloutStorage, ImageRolloutStorage
 from collections import deque
 import numpy as np
 from typing import List, Dict
@@ -17,7 +17,8 @@ from onpolicy.ppo.expansion import OfflineExpansion
 class PPO(object):
     def __init__(self, env, policy: nn.Module, device="cpu", n_steps=1024, nminibatches=32, noptepochs=10, gamma=0.99,
                  lam=0.95, learning_rate=2.5e-4, cliprange=0.2, ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, eps=1e-5,
-                 use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False, use_wandb=False, warmup_dataset:dict=None):
+                 use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False, use_wandb=False, warmup_dataset:dict=None,
+                 store_raw_img=0):
         self.env = env
         self.policy = policy
         self.device = device
@@ -45,9 +46,15 @@ class PPO(object):
             self.n_envs = self.env.num_envs
         else:
             self.n_envs = 1
-        self.rollouts = RolloutStorage(self.n_steps, self.n_envs,
-                                       self.env.observation_space.shape, self.env.action_space,
-                                       self.policy.recurrent_hidden_state_size)
+        if store_raw_img:
+            self.rollouts = ImageRolloutStorage(
+                self.n_steps, self.n_envs, self.env.observation_space.shape, self.env.action_space,
+                self.policy.recurrent_hidden_state_size, image_dim=store_raw_img
+            )
+        else:
+            self.rollouts = RolloutStorage(self.n_steps, self.n_envs,
+                                        self.env.observation_space.shape, self.env.action_space,
+                                        self.policy.recurrent_hidden_state_size)
 
         self.optimizer = optim.Adam(policy.parameters(), lr=learning_rate, eps=eps)
         self.env_id = self.env.get_attr("spec")[0].id
@@ -65,8 +72,7 @@ class PPO(object):
         # goal_dim = self.env.get_attr("goal")[0].shape[0]
         # if self.reduction_strategy == "simultaneous":
 
-        self.rollouts.obs[0].copy_(obs)
-        self.rollouts.masks[0].copy_(torch.zeros((self.n_envs, 1)))
+        self.rollouts.init(obs)
         self.rollouts.to(self.device)
         self.num_timesteps = 0
         # loss_names = ["value_loss", "policy_loss", "entropy", "grad_norm", "param_norm",
@@ -90,7 +96,7 @@ class PPO(object):
                 # Sample actions
                 with torch.no_grad():
                     value, action, action_log_prob, recurrent_hidden_states = self.policy.act(
-                        self.rollouts.obs[step], self.rollouts.recurrent_hidden_states[step],
+                        self.rollouts.slice_obs(step), self.rollouts.recurrent_hidden_states[step],
                         self.rollouts.masks[step])
 
                 # Obser reward and next obs
@@ -114,7 +120,7 @@ class PPO(object):
 
             with torch.no_grad():
                 next_value = self.policy.get_value(
-                    self.rollouts.obs[-1], self.rollouts.recurrent_hidden_states[-1],
+                    self.rollouts.slice_obs(-1), self.rollouts.recurrent_hidden_states[-1],
                     self.rollouts.masks[-1]).detach()
 
             self.rollouts.compute_returns(next_value, self.use_gae, self.gamma, self.lam)
@@ -226,16 +232,16 @@ class PPO(object):
         indices = np.arange(num_sample)
         n_value_epoch = 5
         losses = dict(policy_loss=deque(maxlen=50), grad_norm=deque(maxlen=50), 
-                      aux_pos_loss=deque(maxlen=50), aux_rot_loss=deque(maxlen=50), 
+                      # aux_pos_loss=deque(maxlen=50), aux_rot_loss=deque(maxlen=50), 
                       param_norm=deque(maxlen=50), value_loss=deque(maxlen=50),
                       action_param_error=deque(maxlen=50), action_type_error=deque(maxlen=50))
         optimizer = optim.Adam([p[1] for p in self.policy.named_parameters() if not "log_std" in p[0]], lr=1e-3, weight_decay=0)
         # self.save(os.path.join(logger.get_dir(), "model_init.pt"))
                 
         from utils.evaluation import evaluate_fixed_states
-        success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)
+        # success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)
         # print("Initial success episode: drawer %d / %d, object %d / %d" % (success_episodes[0], total_episodes[0], success_episodes[1], total_episodes[1]))
-        print("Initial success episode: %d / %d" % (success_episodes, total_episodes))
+        # print("Initial success episode: %d / %d" % (success_episodes, total_episodes))
         for i in range(n_aux_epoch + n_epoch):
             np.random.shuffle(indices)
             for j in range(num_sample // batch_size):
@@ -249,12 +255,12 @@ class PPO(object):
                 #     actions_batch)
                 # loss = -action_log_probs.mean()
                 loss = self.policy.get_bc_loss(obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch)
-                aux_pos_loss, aux_rot_loss = self.policy.get_aux_loss(obs_batch)
+                # aux_pos_loss, aux_rot_loss = self.policy.get_aux_loss(obs_batch)
                 optimizer.zero_grad()
                 if i < n_aux_epoch:
                     (0 * loss + aux_pos_loss + 0.1 * aux_rot_loss).backward()
                 else:
-                    (loss + aux_pos_loss + 0.1 * aux_rot_loss).backward()
+                    loss.backward()
                 # grads = [p.grad for p in self.policy.parameters() if p.grad is not None]
                 # device = grads[0].device
                 # total_norm = torch.norm(torch.stack([torch.norm(g.detach(), 2).to(device) for g in grads]), 2)
@@ -272,10 +278,10 @@ class PPO(object):
                     torch.norm(torch.stack([torch.norm(p.detach()) for p in self.policy.parameters()])).item()
                 )
                 losses["policy_loss"].append(loss.item())
-                losses["aux_pos_loss"].append(aux_pos_loss.item())
-                losses["aux_rot_loss"].append(aux_rot_loss.item())
+                # losses["aux_pos_loss"].append(aux_pos_loss.item())
+                # losses["aux_rot_loss"].append(aux_rot_loss.item())
                 losses["grad_norm"].append(total_norm.item())
-            if i >= n_aux_epoch and (i % eval_interval == 0 or i == n_epoch - 1):
+            if i >= n_aux_epoch and (i % eval_interval == 0 or i == n_aux_epoch + n_epoch - 1):
                 success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)
                 # print("Success episode: drawer %d / %d, object %d / %d" % (success_episodes[0], total_episodes[0], success_episodes[1], total_episodes[1]))
                 print("Success episode: %d / %d" % (success_episodes, total_episodes))
@@ -302,7 +308,7 @@ class PPO(object):
         advantages = (advantages - adv_mean) / (adv_std + 1e-5)
 
         losses = dict(value_loss=[], policy_loss=[], entropy=[], grad_norm=[], param_norm=[],
-                      clip_ratio=[], aux_pos_loss=[], aux_rot_loss=[])
+                      clip_ratio=[])
 
         for e in range(self.noptepochs):
             if self.policy.is_recurrent:
@@ -331,7 +337,7 @@ class PPO(object):
                                     1.0 + self.cliprange) * adv_targ
                 clipped_ratio = (torch.abs(ratio - 1) > self.cliprange).sum().item() / ratio.shape[0]
                 action_loss = -torch.min(surr1, surr2).mean()
-                aux_pos_loss, aux_rot_loss = self.policy.get_aux_loss(obs_batch)
+                # aux_pos_loss, aux_rot_loss = self.policy.get_aux_loss(obs_batch)
 
                 values = self.policy.get_value(obs_batch, recurrent_hidden_states_batch, masks_batch)
                 if self.use_clipped_value_loss:
@@ -347,7 +353,7 @@ class PPO(object):
 
                 self.optimizer.zero_grad()
                 (value_loss * self.vf_coef + action_loss -
-                 dist_entropy * self.ent_coef + aux_pos_loss + 0.1 * aux_rot_loss).backward()
+                 dist_entropy * self.ent_coef).backward()
                 total_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 # print('total norm', total_norm)
                 self.optimizer.step()
@@ -376,8 +382,8 @@ class PPO(object):
 
                 losses["value_loss"].append(value_loss.item())
                 losses["policy_loss"].append(action_loss.item())
-                losses["aux_pos_loss"].append(aux_pos_loss.item())
-                losses["aux_rot_loss"].append(aux_rot_loss.item())
+                # losses["aux_pos_loss"].append(aux_pos_loss.item())
+                # losses["aux_rot_loss"].append(aux_rot_loss.item())
                 losses["entropy"].append(dist_entropy.item())
                 losses["grad_norm"].append(total_norm.item())
                 losses["param_norm"].append(param_norm.item())

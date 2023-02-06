@@ -9,8 +9,8 @@ def _flatten_helper(T, N, _tensor):
 
 class RolloutStorage(object):
     def __init__(self, num_steps, num_processes, obs_shape, action_space,
-                 recurrent_hidden_state_size, aux_shape=None):
-        self.obs = torch.zeros(num_steps + 1, num_processes, *obs_shape)
+                 recurrent_hidden_state_size, aux_shape=None, **kwargs):
+        self._obs_create(num_steps, num_processes, obs_shape, **kwargs)
         self.states = np.empty([num_steps + 1, num_processes], dtype=object)
         self.recurrent_hidden_states = torch.zeros(
             num_steps + 1, num_processes, recurrent_hidden_state_size)
@@ -44,8 +44,12 @@ class RolloutStorage(object):
         self.num_steps = num_steps
         self.step = 0
 
+    def init(self, obs):
+        self.obs[0].copy_(obs)
+        self.masks[0].copy_(torch.zeros((self.masks.shape[1], 1)))
+    
     def to(self, device):
-        self.obs = self.obs.to(device)
+        self._obs_to(device)
         self.recurrent_hidden_states = self.recurrent_hidden_states.to(device)
         self.rewards = self.rewards.to(device)
         self.value_preds = self.value_preds.to(device)
@@ -63,7 +67,7 @@ class RolloutStorage(object):
     def insert(self, obs, recurrent_hidden_states, actions, action_log_probs,
                value_preds, rewards, masks, bad_masks, aux_info=None,
                state_dict=None, success_masks=None):
-        self.obs[self.step + 1].copy_(obs)
+        self._obs_insert(obs)
         if state_dict is not None:
             if not isinstance(state_dict, np.ndarray):
                 state_dict = np.asarray(state_dict)
@@ -85,7 +89,7 @@ class RolloutStorage(object):
         self.step = (self.step + 1) % self.num_steps
 
     def after_update(self):
-        self.obs[0].copy_(self.obs[-1])
+        self._obs_after_update()
         # self.states[0] = self.states[-1]
         _shape = self.states.shape
         last_state = self.states[-1]
@@ -161,7 +165,7 @@ class RolloutStorage(object):
             mini_batch_size,
             drop_last=True)
         for indices in sampler:
-            obs_batch = self.obs[:-1].view(-1, *self.obs.size()[2:])[indices]
+            obs_batch = self._obs_sample(indices)
             recurrent_hidden_states_batch = self.recurrent_hidden_states[:-1].view(
                 -1, self.recurrent_hidden_states.size(-1))[indices]
             actions_batch = self.actions.view(-1,
@@ -174,7 +178,7 @@ class RolloutStorage(object):
             next_indices = np.array([(ind + num_processes) % batch_size for ind in indices])
             next_masks = self.masks[:-1].view(-1, 1)[next_indices]
             next_masks[np.where(next_indices < num_processes)] = 0.
-            next_obs_batch = self.obs[:-1].view(-1, *self.obs.size()[2:])[next_indices]
+            next_obs_batch = self._obs_sample(next_indices)
             if advantages is None:
                 adv_targ = None
             else:
@@ -247,6 +251,67 @@ class RolloutStorage(object):
 
             yield obs_batch, recurrent_hidden_states_batch, actions_batch, \
                 value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, adv_targ
+
+    def slice_obs(self, step: int):
+        return self.obs[step]
+    
+    def _obs_create(self, num_steps, num_processes, obs_shape, **kwargs):
+        self.obs = torch.zeros(num_steps + 1, num_processes, *obs_shape)
+    
+    def _obs_to(self, device):
+        self.obs = self.obs.to(device)
+    
+    def _obs_insert(self, obs):
+        self.obs[self.step + 1].copy_(obs)
+
+    def _obs_after_update(self):
+        self.obs[0].copy_(self.obs[-1])
+    
+    def _obs_sample(self, indices):
+        obs_batch = self.obs[:-1].view(-1, *self.obs.size()[2:])[indices]
+        return obs_batch
+
+
+class ImageRolloutStorage(RolloutStorage):
+    def __init__(self, num_steps, num_processes, obs_shape, action_space, recurrent_hidden_state_size, aux_shape=None, image_dim=2*3*128*128):
+        self.image_dim = image_dim
+        super().__init__(num_steps, num_processes, obs_shape, action_space, recurrent_hidden_state_size, aux_shape, image_dim=image_dim)
+    
+    def init(self, obs):
+        image_obs = obs[:, :self.image_dim].to(dtype=self.image_obs.dtype)
+        state_obs = obs[:, self.image_dim:].to(dtype=self.state_obs.dtype)
+        self.image_obs[0].copy_(image_obs)
+        self.state_obs[0].copy_(state_obs)
+        self.masks[0].copy_(torch.zeros((self.masks.shape[1], 1)))
+    
+    def slice_obs(self, step: int):
+        image_obs = self.image_obs[step]
+        state_obs = self.state_obs[step]
+        return torch.cat([image_obs, state_obs], dim=-1)
+    
+    def _obs_create(self, num_steps, num_processes, obs_shape, image_dim):
+        self.image_obs = torch.zeros(num_steps + 1, num_processes, image_dim, dtype=torch.uint8)
+        self.state_obs = torch.zeros(num_steps + 1, num_processes, obs_shape[0] - image_dim, dtype=torch.float32)
+    
+    def _obs_to(self, device):
+        self.image_obs = self.image_obs.to(device)
+        self.state_obs = self.state_obs.to(device)
+
+    def _obs_insert(self, obs):
+        image_obs = obs[..., :self.image_dim].to(dtype=self.image_obs.dtype)
+        state_obs = obs[..., self.image_dim:].to(dtype=self.state_obs.dtype)
+        self.image_obs[self.step + 1].copy_(image_obs)
+        self.state_obs[self.step + 1].copy_(state_obs)
+    
+    def _obs_after_update(self):
+        self.image_obs[0].copy_(self.image_obs[-1])
+        self.state_obs[0].copy_(self.state_obs[-1])
+    
+    def _obs_sample(self, indices):
+        image_obs_batch = self.image_obs[:-1].view(-1, self.image_obs.shape[2])[indices]
+        state_obs_batch = self.state_obs[:-1].view(-1, self.state_obs.shape[2])[indices]
+        obs_batch = torch.cat([image_obs_batch, state_obs_batch], dim=-1)
+        return obs_batch
 
 
 class NpRolloutStorage(object):

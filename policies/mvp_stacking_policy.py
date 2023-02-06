@@ -263,9 +263,9 @@ class MvpPatchPolicy(ActorCriticPolicy):
         self.privilege_dim = privilege_dim
         self.act_dim = act_dim
         self.num_bin = num_bin
-        import matplotlib.pyplot as plt
-        for i in range(canonical_img.shape[0]):
-            plt.imsave("tmp/tmp%d.png" % i, canonical_img[i].transpose((1, 2, 0)).astype(np.uint8))
+        # import matplotlib.pyplot as plt
+        # for i in range(canonical_img.shape[0]):
+        #     plt.imsave("tmp/tmp%d.png" % i, canonical_img[i].transpose((1, 2, 0)).astype(np.uint8))
         self.conv1 = nn.Conv2d(
             in_channels=3, out_channels=embed_dim, kernel_size=patch_size,
             stride=patch_size, bias=False
@@ -324,7 +324,7 @@ class MvpPatchPolicy(ActorCriticPolicy):
         cur_img = torch.narrow(obs, dim=-1, start=0, length=self.image_dim).reshape(
             obs.shape[0], 3, self.img_size, self.img_size
         )
-        goal_img = torch.narrow(obs, dim=-1, start=self.image_dim + self.robot_state_dim, length=self.image_dim).reshape(
+        goal_img = torch.narrow(obs, dim=-1, start=self.image_dim, length=self.image_dim).reshape(
             obs.shape[0], 3, self.img_size, self.img_size
         )
         privilege_info = torch.narrow(obs, dim=-1, start=2 * self.image_dim + self.robot_state_dim, length=self.privilege_dim)

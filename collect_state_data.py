@@ -143,6 +143,7 @@ def main(args):
                 generate_data=True,
                 use_expand_goal_prob=1,
                 expand_task_path=args.expand_task,
+                use_gpu_render=False,
                 # action_dim=5,
             ),
         ),
@@ -241,8 +242,9 @@ def collect_data(env, policy, image_processor, desired_num, balance, round_idx, 
                         goal_feature = traj_features[goal_idx:goal_idx + 1]
                         goal_state = objects_obs[goal_idx:goal_idx + 1]
                         new_obs = np.concatenate([
-                            traj_features[:goal_idx], robot_obs[:goal_idx], 
+                            traj_features[:goal_idx],
                             np.tile(goal_feature, (goal_idx, 1)), 
+                            robot_obs[:goal_idx], 
                             objects_obs[:goal_idx], 
                             np.tile(goal_state, (goal_idx, 1))
                         ], axis=-1).astype(np.float32)
