@@ -37,6 +37,7 @@ class PPO(object):
         self.use_linear_lr_decay = use_linear_lr_decay
         self.use_wandb = use_wandb
         self.warmup_dataset = warmup_dataset
+        self.store_raw_img = store_raw_img
 
         # if isinstance(self.env, VecEnv):
         #     self.n_envs = self.env.num_envs
@@ -188,8 +189,8 @@ class PPO(object):
     def set_task_and_il(self, data_rounds: list):
         self.env.env_method("clear_tasks")
         total_tasks = []
-        for data_round in [5]:
-            with open("distill_tasks_raw_expand%d.pkl" % data_round, "rb") as f:
+        for data_round in data_rounds:
+            with open("distill_tasks_%sexpand%d.pkl" % ("raw_" if self.store_raw_img else "", data_round), "rb") as f:
                 new_tasks = pickle.load(f)
             if isinstance(new_tasks, list):
                 total_tasks.extend(new_tasks)
@@ -206,7 +207,7 @@ class PPO(object):
         
         total_dataset = []
         for data_round in data_rounds:
-            with open("distill_dataset_stacking_raw_expand%d.pkl" % data_round, "rb") as f:
+            with open("distill_dataset_stacking_%sexpand%d.pkl" % ("raw_" if self.store_raw_img else "", data_round), "rb") as f:
                 try:
                     while True:
                         dataset = pickle.load(f)
@@ -220,8 +221,8 @@ class PPO(object):
         for k in total_dataset[0].keys():
             il_dataset[k] = np.concatenate([total_dataset[i][k] for i in range(len(total_dataset))], axis=0) 
         self.il_warmup(
-            il_dataset, n_epoch=30, eval_interval=5, batch_size=32, 
-            n_aux_epoch=0
+            il_dataset, n_epoch=5, eval_interval=5, batch_size=64, 
+            n_aux_epoch=5
         )
 
     def il_warmup(self, dataset, train_value=False, n_epoch=15, batch_size=32, eval_interval=10, n_aux_epoch=0):
@@ -232,7 +233,7 @@ class PPO(object):
         indices = np.arange(num_sample)
         n_value_epoch = 5
         losses = dict(policy_loss=deque(maxlen=50), grad_norm=deque(maxlen=50), 
-                      # aux_pos_loss=deque(maxlen=50), aux_rot_loss=deque(maxlen=50), 
+                      aux_pos_loss=deque(maxlen=50), aux_rot_loss=deque(maxlen=50), 
                       param_norm=deque(maxlen=50), value_loss=deque(maxlen=50),
                       action_param_error=deque(maxlen=50), action_type_error=deque(maxlen=50))
         optimizer = optim.Adam([p[1] for p in self.policy.named_parameters() if not "log_std" in p[0]], lr=1e-3, weight_decay=0)
@@ -255,7 +256,7 @@ class PPO(object):
                 #     actions_batch)
                 # loss = -action_log_probs.mean()
                 loss = self.policy.get_bc_loss(obs_batch, recurrent_hidden_states_batch, masks_batch, actions_batch)
-                # aux_pos_loss, aux_rot_loss = self.policy.get_aux_loss(obs_batch)
+                aux_pos_loss, aux_rot_loss = self.policy.get_aux_loss(obs_batch)
                 optimizer.zero_grad()
                 if i < n_aux_epoch:
                     (0 * loss + aux_pos_loss + 0.1 * aux_rot_loss).backward()
@@ -278,8 +279,8 @@ class PPO(object):
                     torch.norm(torch.stack([torch.norm(p.detach()) for p in self.policy.parameters()])).item()
                 )
                 losses["policy_loss"].append(loss.item())
-                # losses["aux_pos_loss"].append(aux_pos_loss.item())
-                # losses["aux_rot_loss"].append(aux_rot_loss.item())
+                losses["aux_pos_loss"].append(aux_pos_loss.item())
+                losses["aux_rot_loss"].append(aux_rot_loss.item())
                 losses["grad_norm"].append(total_norm.item())
             if i >= n_aux_epoch and (i % eval_interval == 0 or i == n_aux_epoch + n_epoch - 1):
                 success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)

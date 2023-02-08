@@ -120,9 +120,10 @@ class MvpStackingPolicy(ActorCriticPolicy):
         #     self.act_feature_slots[i](proj_input) for i in range(len(self.act_feature_slots))
         # ], dim=1)  # bsz, n_slot, slot_dim
         interm_act_slot_feature = torch.cat([
-            proj_cur_feat.detach().view(proj_cur_feat.shape[0], self.n_primitive, -1),
-            proj_goal_feat.detach().view(proj_goal_feat.shape[0], self.n_primitive, -1)
+            proj_cur_feat.view(proj_cur_feat.shape[0], self.n_primitive, -1),
+            proj_goal_feat.view(proj_goal_feat.shape[0], self.n_primitive, -1)
         ], dim=-1)  # bsz, n_slot, slot_dim
+        # interm_act_slot_feature = interm_act_slot_feature.detach()
         act_slot_feature = self.slot_attn_encoder(interm_act_slot_feature.permute((1, 0, 2))).permute((1, 0, 2))
         # print("input std", torch.std(proj_input, dim=0).mean(), "input mean", torch.mean(proj_input))
         if self.value_mvp_projector is not None:
@@ -250,6 +251,9 @@ class MvpPatchPolicy(ActorCriticPolicy):
     def __init__(self, canonical_file, embed_dim, act_dim, num_bin, privilege_dim) -> None:
         super().__init__()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # import torchvision.transforms as T
+        # self.augment_fn = T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.0)
+        # self.augment_fn = T.ColorJitter(brightness=0.0, contrast=0.0, saturation=0.0, hue=0.0)
         self.canonical_file = canonical_file
         import pickle
         with open(canonical_file, "rb") as f:
@@ -274,11 +278,11 @@ class MvpPatchPolicy(ActorCriticPolicy):
         self.n_patch = n_patch = int((self.img_size / patch_size) ** 2)
         self.n_obj = canonical_img.shape[0]
         scale = np.sqrt(embed_dim)
-        self.position_embedding = nn.Parameter(scale * torch.randn(1 + 2 * n_patch, embed_dim))
+        self.position_embedding = nn.Parameter(scale * torch.randn(1 + n_patch, embed_dim))
         self.ln_pre = nn.LayerNorm(embed_dim)
 
         self.slot_attn_mask = torch.zeros(
-            (2 * n_patch + canonical_img.shape[0], 2 * n_patch + self.n_obj), 
+            (n_patch + canonical_img.shape[0], n_patch + self.n_obj), 
             dtype=torch.bool, device=device
         )
         self.slot_attn_mask[:, -canonical_img.shape[0]:] = 1
@@ -287,16 +291,20 @@ class MvpPatchPolicy(ActorCriticPolicy):
         _slot_encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim, nhead=1, dim_feedforward=embed_dim, dropout=0.0, batch_first=True
         ) # batch, seq, feature
-        self.slot_attn_encoder = nn.TransformerEncoder(_slot_encoder_layer, num_layers=3)
+        self.slot_attn_encoder_cross = nn.TransformerEncoder(_slot_encoder_layer, num_layers=1)
+        _act_encoder_layer = nn.TransformerEncoderLayer(
+            d_model=2 * embed_dim, nhead=1, dim_feedforward=embed_dim, dropout=0.0, batch_first=True
+        ) # batch, seq, feature
+        self.act_attn_encoder = nn.TransformerEncoder(_act_encoder_layer, num_layers=3)
         
-        self.aux_predictor = nn.Linear(embed_dim, 12)
+        self.aux_predictor = nn.Linear(embed_dim, 6)
         self.act_type = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim), nn.ReLU(),
-            nn.Linear(embed_dim, 1)
+            nn.Linear(2 * embed_dim, 2 * embed_dim), nn.ReLU(),
+            nn.Linear(2 * embed_dim, 1)
         )
         self.act_param = nn.ModuleList([nn.Sequential(
-            nn.Linear(embed_dim, embed_dim), nn.ReLU(),
-            nn.Linear(embed_dim, num_bin)
+            nn.Linear(2 * embed_dim, 2 * embed_dim), nn.ReLU(),
+            nn.Linear(2 * embed_dim, num_bin)
         ) for _ in range(act_dim)])
         self.value_object_encode_layer = nn.Sequential(
             nn.Linear(14, 64), nn.ReLU(), 
@@ -314,7 +322,16 @@ class MvpPatchPolicy(ActorCriticPolicy):
         #     MvpStackingPolicy.init_weights(self.act_param[i], [0.01])
 
     def _normalize_img(self, x):
+        # try color jittor
         x = x / 255.0
+        # if x.shape[0] > 256:
+        #     n_round = x.shape[0] // 256 if (x.shape[0] % 256 == 0) else x.shape[0] // 256 + 1
+        #     aug_x = []
+        #     for i in range(n_round):
+        #         aug_x.append(self.augment_fn.forward(x[256 * i: 256 * (i + 1)]))
+        #     x = torch.cat(aug_x, dim=0)
+        # else:
+        #     x = self.augment_fn.forward(x)
         im_mean = torch.Tensor([0.485, 0.456, 0.406]).reshape((1, 3, 1, 1)).to(x.device)
         im_std = torch.Tensor([0.229, 0.224, 0.225]).reshape((1, 3, 1, 1)).to(x.device)
         return (x - im_mean) / im_std
@@ -356,19 +373,23 @@ class MvpPatchPolicy(ActorCriticPolicy):
         goal_patch_feat = goal_patch_feat.reshape(bsz, goal_patch_feat.shape[1], -1).transpose(1, 2) # bsz, n_patch, emb
         canonical_patch = self.conv1.forward(self._normalize_img(self.canonical_img)).reshape(1, self.n_obj, -1).tile(bsz, 1, 1) # bsz, n_obj, emb
         cur_patch_feat = cur_patch_feat + self.position_embedding[:self.n_patch]
-        goal_patch_feat = goal_patch_feat + self.position_embedding[self.n_patch: 2 * self.n_patch]
+        goal_patch_feat = goal_patch_feat + self.position_embedding[:self.n_patch]
         canonical_patch = canonical_patch + self.position_embedding[-1:]
-        input_patches = torch.cat([cur_patch_feat, goal_patch_feat, canonical_patch], dim=1)
-        input_patches = self.ln_pre(input_patches)
+        cur_patches = torch.cat([cur_patch_feat, canonical_patch], dim=1)
+        cur_patches = self.ln_pre(cur_patches)
+        goal_patches = torch.cat([goal_patch_feat, canonical_patch], dim=1)
+        goal_patches = self.ln_pre(goal_patches)
 
-        act_slot_feature = self.slot_attn_encoder.forward(input_patches, mask=self.slot_attn_mask)
-        act_slot_feature = act_slot_feature[:, -self.n_obj:, :]
+        act_slot_feature_cur = self.slot_attn_encoder_cross.forward(cur_patches, mask=self.slot_attn_mask)[:, -self.n_obj:, :]
+        act_slot_feature_goal = self.slot_attn_encoder_cross.forward(goal_patches, mask=self.slot_attn_mask)[:, -self.n_obj:, :]
+        act_slot_feature = torch.cat([act_slot_feature_cur, act_slot_feature_goal], dim=-1)
         return act_slot_feature
     
     def forward(self, obs, rnn_hxs=None, rnn_masks=None):
         bsz = obs.shape[0]
         cur_img, goal_img, privilege_info = self._obs_parser(obs)
-        act_slot_feature = self._forward_object_feat(obs)
+        act_slot_feature = self._forward_object_feat(obs).detach()
+        act_slot_feature = self.act_attn_encoder.forward(act_slot_feature)
 
         act_type_logits = self.act_type(act_slot_feature).squeeze(dim=-1) # bsz, n_obj
         act_param_logits = [self.act_param[i](act_slot_feature) for i in range(len(self.act_param))]
@@ -391,7 +412,7 @@ class MvpPatchPolicy(ActorCriticPolicy):
     
     def get_aux_loss(self, obs):
         _, _, privilege_info = self._obs_parser(obs)
-        act_slot_feature = self._forward_object_feat(obs)
+        act_slot_feature = self._forward_object_feat(obs).view(obs.shape[0], self.n_obj, 2, -1)
         aux_pred = self.aux_predictor(act_slot_feature)
         gt = privilege_info.view((privilege_info.shape[0], 2, self.n_obj, 7))
         gt_cur = gt[:, 0] # bsz, n_primitive, 7
@@ -403,17 +424,14 @@ class MvpPatchPolicy(ActorCriticPolicy):
         x_vec = torch.Tensor([1., 0., 0.]).float().to(obs.device).view((1, 1, 3))
         gt_cur_vec = quat_apply_batch(gt_cur[:, :, 3:], x_vec.tile((gt_cur.shape[0], gt_cur.shape[1], 1)))
         gt_goal_vec = quat_apply_batch(gt_goal[:, :, 3:], x_vec.tile((gt_goal.shape[0], gt_goal.shape[1], 1)))
-        gt_pos = torch.cat([gt_cur[:, :, :3], gt_goal[:, :, :3]], dim=-1)
-        gt_rot = torch.cat([gt_cur_vec, gt_goal_vec], dim=-1)
-        pos_loss = torch.mean((aux_pred[..., :6] - gt_pos).abs())
-        rot_loss = torch.mean(
-            1 - torch.abs(torch.nn.functional.cosine_similarity(aux_pred[:, :, 6:9], gt_rot[..., :3], dim=-1)) \
-                + 1 - torch.abs(torch.nn.functional.cosine_similarity(aux_pred[:, :, 9:], gt_rot[..., 3:], dim=-1))
-        )
-        rot_reg = torch.mean(
-            (torch.norm(aux_pred[:, :, 6:9], dim=-1) - 1) ** 2 + (torch.norm(aux_pred[:, :, 9:], dim=-1) - 1) ** 2
-        )
-        rot_loss += rot_reg
+        gt_pos = torch.stack([gt_cur[:, :, :3], gt_goal[:, :, :3]], dim=-2)
+        gt_rot = torch.stack([gt_cur_vec, gt_goal_vec], dim=-2)
+        pos_loss = torch.mean((aux_pred[..., :3] - gt_pos).abs())
+        rot_loss = torch.mean(1 - torch.abs(torch.nn.functional.cosine_similarity(aux_pred[..., 3:6], gt_rot, dim=-1)))
+        # rot_reg = torch.mean(
+        #     (torch.norm(aux_pred[:, :, 6:9], dim=-1) - 1) ** 2 + (torch.norm(aux_pred[:, :, 9:], dim=-1) - 1) ** 2
+        # )
+        # rot_loss += rot_reg
 
         return pos_loss, rot_loss
 

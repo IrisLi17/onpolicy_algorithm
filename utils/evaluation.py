@@ -152,8 +152,10 @@ def evaluate_tasks(env, policy, task_file="test_tasks.pkl"):
     assert env.num_envs == 1
     task_per_env = new_tasks.shape[0] // env.num_envs if (
         new_tasks.shape[0] % env.num_envs) == 0 else new_tasks.shape[0] // env.num_envs + 1
+    task_per_env = min(task_per_env, 500)
     print("all tasks", new_tasks.shape[0])
     print("task per env", task_per_env)
+    env.env_method("clear_tasks")
     for i in range(env.num_envs):
         env.env_method("add_tasks", new_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]])
     # env.env_method("set_dist_threshold", 0.08)
@@ -162,12 +164,12 @@ def evaluate_tasks(env, policy, task_file="test_tasks.pkl"):
     detail_stats = [[0, 0] for _ in range(7)]
     obs = env.reset()
     n_to_move = env.env_method("oracle_feasible", obs.detach().cpu().numpy())[0][0]
-    while n_episode < 500:
+    while n_episode < 200:
         with torch.no_grad():
             _, actions, _, _ = policy.act(obs, deterministic=False)
-        with torch.no_grad():
-            aux_pos_loss, aux_rot_loss = policy.get_aux_loss(obs)
-        print("aux pos loss", aux_pos_loss, "aux rot loss", aux_rot_loss)
+        # with torch.no_grad():
+        #     aux_pos_loss, aux_rot_loss = policy.get_aux_loss(obs)
+        # print("aux pos loss", aux_pos_loss, "aux rot loss", aux_rot_loss)
         obs, reward, done, info = env.step(actions)
         if done[0]:
             n_success += info[0]["is_success"]
