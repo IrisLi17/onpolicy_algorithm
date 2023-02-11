@@ -221,8 +221,8 @@ class PPO(object):
         for k in total_dataset[0].keys():
             il_dataset[k] = np.concatenate([total_dataset[i][k] for i in range(len(total_dataset))], axis=0) 
         self.il_warmup(
-            il_dataset, n_epoch=5, eval_interval=5, batch_size=64, 
-            n_aux_epoch=5
+            il_dataset, n_epoch=30, eval_interval=5, batch_size=64, 
+            n_aux_epoch=0
         )
 
     def il_warmup(self, dataset, train_value=False, n_epoch=15, batch_size=32, eval_interval=10, n_aux_epoch=0):
