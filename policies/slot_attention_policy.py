@@ -94,35 +94,38 @@ class SlotAttentionPoicy(ActorCriticPolicy):
       length=self.privilege_dim)
     return cur_image.detach(), goal_image.detach(), privilege_info.detach()
 
-  def forward(self, obs, rnn_hxs=None, rnn_masks=None):
+  def forward(self, obs, rnn_hxs=None, rnn_masks=None, forward_policy=True):
     cur_image, goal_image, privilege_info = self._obs_parser(obs)
-    cur_image = (cur_image / 255.0 - self.im_mean) / self.im_std
-    cur_image = cur_image.permute((0, 2, 3, 1))
-    with torch.no_grad():
-      cur_combined_recon, cur_recons, cur_masks, cur_slot_feature = self.oc_encoder.forward(cur_image)
-    goal_image = (goal_image / 255.0 - self.im_mean) / self.im_std
-    goal_image = goal_image.permute((0, 2, 3, 1))
-    with torch.no_grad():
-      goal_combined_recon, goal_recons, goal_masks, goal_slot_feature = self.oc_encoder.forward(goal_image)
-    # import matplotlib.pyplot as plt
-    # debug_cur = ((cur_combined_recon[0:1].permute(0, 3, 1, 2) * self.im_std + self.im_mean) * 255.0)[0].permute(1, 2, 0)
-    # plt.imsave("tmp/tmp0.png", debug_cur.detach().cpu().numpy().astype(np.uint8))
-    # plt.imsave("tmp/tmp0_gt.png", ((cur_image * self.im_std.squeeze() + self.im_mean.squeeze()) * 255)[0].detach().cpu().numpy().astype(np.uint8))
-    # debug_goal = ((goal_combined_recon[0:1].permute(0, 3, 1, 2) * self.im_std + self.im_mean) * 255.0)[0].permute(1, 2, 0)
-    # plt.imsave("tmp/tmp1.png", debug_goal.detach().cpu().numpy().astype(np.uint8))
-    # plt.imsave("tmp/tmp1_gt.png", ((goal_image * self.im_std.squeeze() + self.im_mean.squeeze()) * 255)[0].detach().cpu().numpy().astype(np.uint8))
-    if not hasattr(self, "color"):
-      self.color = np.array(COLOR[:6])
-    cur_obj_feature, cur_assignment = assign_object(
-      cur_image * self.im_std.squeeze() + self.im_mean.squeeze(), cur_masks, self.color, cur_slot_feature)
-    goal_obj_feature, goal_assignment = assign_object(
-      goal_image * self.im_std.squeeze() + self.im_mean.squeeze(), goal_masks, self.color, goal_slot_feature)
-    # print("cur assignment", cur_assignment[0], "goal_assignment", goal_assignment[0])
-    # exit()
-    obj_feature = torch.cat([cur_obj_feature, goal_obj_feature], dim=-1)
-    act_slot_feature = self.actor_attn_encoder(obj_feature)
-    act_type_logits = self.act_type(act_slot_feature).squeeze(dim=-1) # bsz, n_obj
-    act_param_logits = [self.act_param[i](act_slot_feature) for i in range(len(self.act_param))]
+    if forward_policy:
+      cur_image = (cur_image / 255.0 - self.im_mean) / self.im_std
+      cur_image = cur_image.permute((0, 2, 3, 1))
+      with torch.no_grad():
+        cur_combined_recon, cur_recons, cur_masks, cur_slot_feature = self.oc_encoder.forward(cur_image)
+      goal_image = (goal_image / 255.0 - self.im_mean) / self.im_std
+      goal_image = goal_image.permute((0, 2, 3, 1))
+      with torch.no_grad():
+        goal_combined_recon, goal_recons, goal_masks, goal_slot_feature = self.oc_encoder.forward(goal_image)
+      # import matplotlib.pyplot as plt
+      # debug_cur = ((cur_combined_recon[0:1].permute(0, 3, 1, 2) * self.im_std + self.im_mean) * 255.0)[0].permute(1, 2, 0)
+      # plt.imsave("tmp/tmp0.png", debug_cur.detach().cpu().numpy().astype(np.uint8))
+      # plt.imsave("tmp/tmp0_gt.png", ((cur_image * self.im_std.squeeze() + self.im_mean.squeeze()) * 255)[0].detach().cpu().numpy().astype(np.uint8))
+      # debug_goal = ((goal_combined_recon[0:1].permute(0, 3, 1, 2) * self.im_std + self.im_mean) * 255.0)[0].permute(1, 2, 0)
+      # plt.imsave("tmp/tmp1.png", debug_goal.detach().cpu().numpy().astype(np.uint8))
+      # plt.imsave("tmp/tmp1_gt.png", ((goal_image * self.im_std.squeeze() + self.im_mean.squeeze()) * 255)[0].detach().cpu().numpy().astype(np.uint8))
+      if not hasattr(self, "color"):
+        self.color = np.array(COLOR[:6])
+      cur_obj_feature, cur_assignment = assign_object(
+        cur_image * self.im_std.squeeze() + self.im_mean.squeeze(), cur_masks, self.color, cur_slot_feature)
+      goal_obj_feature, goal_assignment = assign_object(
+        goal_image * self.im_std.squeeze() + self.im_mean.squeeze(), goal_masks, self.color, goal_slot_feature)
+      # print("cur assignment", cur_assignment[0], "goal_assignment", goal_assignment[0])
+      # exit()
+      obj_feature = torch.cat([cur_obj_feature, goal_obj_feature], dim=-1)
+      act_slot_feature = self.actor_attn_encoder(obj_feature)
+      act_type_logits = self.act_type(act_slot_feature).squeeze(dim=-1) # bsz, n_obj
+      act_param_logits = [self.act_param[i](act_slot_feature) for i in range(len(self.act_param))]
+    else:
+      act_type_logits, act_param_logits = None, None
     # value
     bsz = privilege_info.shape[0]
     obj_and_goals = privilege_info.reshape(
@@ -138,6 +141,9 @@ class SlotAttentionPoicy(ActorCriticPolicy):
   
   def evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions):
     return MvpStackingPolicy.evaluate_actions(self, obs, rnn_hxs, rnn_masks, actions)
+  
+  def get_value(self, obs, rnn_hxs=None, rnn_masks=None):
+    return self.forward(obs, rnn_hxs, rnn_masks, forward_policy=False)[0]
   
   def get_bc_loss(self, obs, rnn_hxs, rnn_masks, actions):
     return MvpStackingPolicy.get_bc_loss(self, obs, rnn_hxs, rnn_masks, actions)

@@ -214,6 +214,8 @@ class PPO(object):
                         if isinstance(dataset, list):
                             total_dataset.extend(dataset)
                         else:
+                            # compute return
+                            dataset["return"] = self.gamma ** np.arange(len(dataset["obs"]) - 1, -1, -1)
                             total_dataset.append(dataset)
                 except EOFError:
                     pass
@@ -221,7 +223,7 @@ class PPO(object):
         for k in total_dataset[0].keys():
             il_dataset[k] = np.concatenate([total_dataset[i][k] for i in range(len(total_dataset))], axis=0) 
         self.il_warmup(
-            il_dataset, n_epoch=30, eval_interval=5, batch_size=64, 
+            il_dataset, train_value=True, n_epoch=10, eval_interval=5, batch_size=64, 
             n_aux_epoch=0
         )
 
@@ -232,6 +234,7 @@ class PPO(object):
         print("Num of samples", num_sample)
         indices = np.arange(num_sample)
         n_value_epoch = 5
+        value_batch_size = 256
         losses = dict(policy_loss=deque(maxlen=50), grad_norm=deque(maxlen=50), 
                       aux_pos_loss=deque(maxlen=50), aux_rot_loss=deque(maxlen=50), 
                       param_norm=deque(maxlen=50), value_loss=deque(maxlen=50),
@@ -239,6 +242,26 @@ class PPO(object):
         optimizer = optim.Adam([p[1] for p in self.policy.named_parameters() if not "log_std" in p[0]], lr=1e-3, weight_decay=0)
         # self.save(os.path.join(logger.get_dir(), "model_init.pt"))
                 
+        if train_value:
+            assert "return" in dataset
+            dataset["return"] = torch.from_numpy(dataset["return"]).float().to(self.device)
+            for i in range(n_value_epoch):
+                np.random.shuffle(indices)
+                for j in range(num_sample // value_batch_size):
+                    mb_idx = indices[value_batch_size * j: value_batch_size * (j + 1)]
+                    obs_batch = dataset["obs"][mb_idx]
+                    returns_batch = dataset["return"][mb_idx]
+                    value_pred = self.policy.get_value(obs_batch, None, None)
+                    value_loss = torch.mean((value_pred - returns_batch) ** 2)
+                    optimizer.zero_grad()
+                    value_loss.backward()
+                    optimizer.step()
+                    losses["value_loss"].append(value_loss.item())
+                logger.logkv("epoch", i)
+                for k in losses:
+                    logger.logkv(k, np.mean(losses[k]))
+                logger.dump_tabular()
+        
         from utils.evaluation import evaluate_fixed_states
         # success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)
         # print("Initial success episode: drawer %d / %d, object %d / %d" % (success_episodes[0], total_episodes[0], success_episodes[1], total_episodes[1]))
