@@ -340,7 +340,7 @@ class SlotAttentionAutoEncoder(nn.Module):
         slot_size=64,
         mlp_hidden_size=128)
 
-  def forward(self, image: torch.Tensor):
+  def batch_forward(self, image: torch.Tensor):
     # `image` has shape: [batch_size, width, height, num_channels].
 
     # Convolutional encoder with position embedding.
@@ -371,6 +371,23 @@ class SlotAttentionAutoEncoder(nn.Module):
     recon_combined = torch.sum(recons * masks, dim=1)  # Recombine image.
     # `recon_combined` has shape: [batch_size, width, height, num_channels].
 
+    return recon_combined, recons, masks, slots
+  
+  def forward(self, image: torch.Tensor):
+    if image.shape[0] <= 64:
+      return self.batch_forward(image)
+    n_rounds = image.shape[0] // 64 if image.shape[0] % 64 == 0 else image.shape[0] // 64 + 1
+    recon_combined, recons, masks, slots = [], [], [], []
+    for i in range(n_rounds):
+      image_batch = image[64 * i: 64 * (i + 1)]
+      res_batch = self.batch_forward(image_batch)
+      recon_combined.append(res_batch[0])
+      recons.append(res_batch[1])
+      masks.append(res_batch[2])
+      slots.append(res_batch[3])
+    recon_combined, recons, masks, slots = map(
+      lambda x: torch.cat(x, dim=0), [recon_combined, recons, masks, slots]
+    )
     return recon_combined, recons, masks, slots
 
 
