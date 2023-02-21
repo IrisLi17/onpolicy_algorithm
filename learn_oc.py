@@ -15,10 +15,10 @@ im_mean = torch.Tensor([0.5, 0.5, 0.5]).reshape((1, 3, 1, 1)).to(device)
 im_std = torch.Tensor([0.5, 0.5, 0.5]).reshape((1, 3, 1, 1)).to(device)
 
 def train(args):
-    data_rounds = [5,]
+    data_rounds = [3,]
     total_dataset = []
     for data_round in data_rounds:
-        with open("distill_dataset_stacking_%sexpand%d.pkl" % ("raw_", data_round), "rb") as f:
+        with open("distill_dataset_new_stacking_%sexpand%d.pkl" % ("raw_", data_round), "rb") as f:
             try:
                 while True:
                     dataset = pickle.load(f)
@@ -99,7 +99,7 @@ def eval(args):
     obs = data[:, -3 * 128 * 128:]
     '''
     total_dataset = []
-    with open("distill_dataset_stacking_raw_expand5.pkl", "rb") as f:
+    with open("distill_dataset_new_stacking_raw_expand3.pkl", "rb") as f:
         for i in range(50):
             dataset = pickle.load(f)
             if isinstance(dataset, list):
@@ -108,7 +108,7 @@ def eval(args):
                 total_dataset.append(dataset)
         data = np.concatenate([total_dataset[i]["obs"] for i in range(len(total_dataset))], axis=0) 
     obs = data[:, :3 * 128 * 128]
-
+    # '''
     model = SlotAttentionAutoEncoder(resolution=(128, 128), num_slots=args.num_slots, num_iterations=3)
     model.to(device)
     model.load_state_dict(torch.load(args.load_path)["param"])

@@ -62,7 +62,7 @@ class PPO(object):
         self.expansion = OfflineExpansion(self.rollouts, self.env, self.policy)
 
     def learn(self, total_timesteps, callback=None):
-        data_rounds = [5,]
+        data_rounds = [3,]
         rl_start_update = 0
         self.set_task_and_il(data_rounds)
         
@@ -190,7 +190,7 @@ class PPO(object):
         self.env.env_method("clear_tasks")
         total_tasks = []
         for data_round in data_rounds:
-            with open("distill_tasks_%sexpand%d.pkl" % ("raw_" if self.store_raw_img else "", data_round), "rb") as f:
+            with open("distill_tasks_new_%sexpand%d.pkl" % ("raw_" if self.store_raw_img else "", data_round), "rb") as f:
                 new_tasks = pickle.load(f)
             if isinstance(new_tasks, list):
                 total_tasks.extend(new_tasks)
@@ -207,7 +207,7 @@ class PPO(object):
         
         total_dataset = []
         for data_round in data_rounds:
-            with open("distill_dataset_stacking_%sexpand%d.pkl" % ("raw_" if self.store_raw_img else "", data_round), "rb") as f:
+            with open("distill_dataset_new_stacking_%sexpand%d.pkl" % ("raw_" if self.store_raw_img else "", data_round), "rb") as f:
                 try:
                     while True:
                         dataset = pickle.load(f)
@@ -228,7 +228,7 @@ class PPO(object):
         )
 
     def il_warmup(self, dataset, train_value=False, n_epoch=15, batch_size=32, eval_interval=10, n_aux_epoch=0):
-        dataset["obs"] = torch.from_numpy(dataset["obs"]).float().to(self.device)
+        # dataset["obs"] = torch.from_numpy(dataset["obs"]).float().to(self.device)
         dataset["action"] = torch.from_numpy(dataset["action"]).float().to(self.device)
         num_sample = dataset["obs"].shape[0]
         print("Num of samples", num_sample)
@@ -249,7 +249,7 @@ class PPO(object):
                 np.random.shuffle(indices)
                 for j in range(num_sample // value_batch_size):
                     mb_idx = indices[value_batch_size * j: value_batch_size * (j + 1)]
-                    obs_batch = dataset["obs"][mb_idx]
+                    obs_batch = torch.from_numpy(dataset["obs"][mb_idx]).float().to(self.device)
                     returns_batch = dataset["return"][mb_idx]
                     value_pred = self.policy.get_value(obs_batch, None, None)
                     value_loss = torch.mean((value_pred - returns_batch) ** 2)
@@ -270,7 +270,7 @@ class PPO(object):
             np.random.shuffle(indices)
             for j in range(num_sample // batch_size):
                 mb_idx = indices[batch_size * j: batch_size * (j + 1)]
-                obs_batch = dataset["obs"][mb_idx]
+                obs_batch = torch.from_numpy(dataset["obs"][mb_idx]).float().to(self.device)
                 actions_batch = dataset["action"][mb_idx]
                 recurrent_hidden_states_batch = torch.zeros((obs_batch.shape[0], 1))
                 masks_batch = torch.ones((obs_batch.shape[0], 1))
