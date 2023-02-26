@@ -23,6 +23,8 @@ import sys
 sys.path.append("../stacking_env")
 from bullet_envs.env.primitive_stacking import COLOR
 sys.path.remove("../stacking_env")
+import time
+from typing import Tuple
 
 
 class SlotAttentionPoicy(ActorCriticPolicy):
@@ -30,10 +32,12 @@ class SlotAttentionPoicy(ActorCriticPolicy):
     super().__init__()
     self.resolution = resolution
     self.act_dim = act_dim
-    self.num_bin = num_bin
+    if isinstance(num_bin, int):
+      num_bin = [num_bin] * act_dim
+    self.num_bin = np.array(num_bin)
     self.privilege_dim = privilege_dim
     self.robot_state_dim = 7
-    self.oc_encoder = SlotAttentionAutoEncoder(resolution, num_slots, num_iterations=3)
+    oc_encoder = SlotAttentionAutoEncoder(resolution, num_slots, num_iterations=3)
     _actor_attn_layer = nn.TransformerEncoderLayer(
       d_model=2 * 64, nhead=1, dim_feedforward=2 * 64, dropout=0.0, batch_first=True
     ) # batch, seq, feature
@@ -42,8 +46,8 @@ class SlotAttentionPoicy(ActorCriticPolicy):
       nn.Linear(2 * 64, 1)
     )
     self.act_param = nn.ModuleList([nn.Sequential(
-      nn.Linear(2 * 64, num_bin)
-    ) for _ in range(act_dim)])
+      nn.Linear(2 * 64, num_bin[i])
+    ) for i in range(act_dim)])
     
     self.value_object_encode_layer = nn.Sequential(
       nn.Linear(14, 64), nn.ReLU(), 
@@ -62,11 +66,13 @@ class SlotAttentionPoicy(ActorCriticPolicy):
       self.init_weights(self.act_param[i], [0.01])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     self.to(device)
-    self.load_encoder(encoder_path, device)
+    self.load_encoder(oc_encoder, encoder_path, device)
 
-  def load_encoder(self, path, device):
+  def load_encoder(self, oc_encoder, path, device):
     checkpoint = torch.load(path, map_location=device)
-    self.oc_encoder.load_state_dict(checkpoint["param"])
+    oc_encoder.load_state_dict(checkpoint["param"])
+    self.oc_encoder = torch.jit.script(oc_encoder) # TODO: does not get faster
+    
     # freeze parameters
     for p in self.oc_encoder.parameters():
       p.requires_grad = False
@@ -113,11 +119,12 @@ class SlotAttentionPoicy(ActorCriticPolicy):
       # plt.imsave("tmp/tmp1.png", debug_goal.detach().cpu().numpy().astype(np.uint8))
       # plt.imsave("tmp/tmp1_gt.png", ((goal_image * self.im_std.squeeze() + self.im_mean.squeeze()) * 255)[0].detach().cpu().numpy().astype(np.uint8))
       if not hasattr(self, "color"):
-        self.color = np.array(COLOR[:6])
-      cur_obj_feature, cur_assignment = assign_object(
-        cur_image * self.im_std.squeeze() + self.im_mean.squeeze(), cur_masks, self.color, cur_slot_feature)
-      goal_obj_feature, goal_assignment = assign_object(
-        goal_image * self.im_std.squeeze() + self.im_mean.squeeze(), goal_masks, self.color, goal_slot_feature)
+        self.color = torch.from_numpy(np.array(COLOR[:6])).float().to(obs.device)
+      with torch.no_grad():
+        cur_obj_feature, cur_assignment = assign_object(
+          cur_image * self.im_std.squeeze() + self.im_mean.squeeze(), cur_masks, self.color, cur_slot_feature)
+        goal_obj_feature, goal_assignment = assign_object(
+          goal_image * self.im_std.squeeze() + self.im_mean.squeeze(), goal_masks, self.color, goal_slot_feature)
       # print("cur assignment", cur_assignment[0], "goal_assignment", goal_assignment[0])
       # exit()
       obj_feature = torch.cat([cur_obj_feature, goal_obj_feature], dim=-1)
@@ -242,7 +249,7 @@ class SlotAttention(nn.Module):
     return slots
 
 
-def spatial_broadcast(slots, resolution):
+def spatial_broadcast(slots, resolution: Tuple[int, int]):
     """Broadcast slot features to a 2D grid and collapse slot dimension."""
     # `slots` has shape: [batch_size, num_slots, slot_size].
     # slots = tf.reshape(slots, [-1, slots.shape[-1]])[:, None, None, :]
@@ -258,13 +265,16 @@ def spatial_flatten(x):
     return x.reshape((-1, x.shape[1] * x.shape[2], x.shape[-1]))
 
 
-def unstack_and_split(x, batch_size, num_channels=3):
+def unstack_and_split(x, batch_size: int, num_channels: int=3):
     """Unstack batch dimension and split into channels and alpha mask."""
     # unstacked = tf.reshape(x, [batch_size, -1] + x.shape.as_list()[1:])
     # channels, masks = tf.split(unstacked, [num_channels, 1], axis=-1)
-    unstacked = x.reshape((batch_size, -1, *(x.shape[1:])))
-    channels = unstacked[..., :num_channels]
-    masks = unstacked[..., -1:]
+    # unstacked = x.reshape((batch_size, -1, *(x.shape[1:])))
+    unstacked = x.reshape((batch_size, -1, x.shape[1], x.shape[2], x.shape[3]))
+    # channels = unstacked[..., :num_channels]
+    channels = torch.narrow(unstacked, dim=-1, start=0, length=num_channels)
+    # masks = unstacked[..., -1:]
+    masks = torch.narrow(unstacked, dim=-1, start=num_channels, length=1)
     return channels, masks
 
 
@@ -340,6 +350,7 @@ class SlotAttentionAutoEncoder(nn.Module):
         slot_size=64,
         mlp_hidden_size=128)
 
+  @torch.jit.export
   def batch_forward(self, image: torch.Tensor):
     # `image` has shape: [batch_size, width, height, num_channels].
 
@@ -385,9 +396,13 @@ class SlotAttentionAutoEncoder(nn.Module):
       recons.append(res_batch[1])
       masks.append(res_batch[2])
       slots.append(res_batch[3])
-    recon_combined, recons, masks, slots = map(
-      lambda x: torch.cat(x, dim=0), [recon_combined, recons, masks, slots]
-    )
+    recon_combined = torch.cat(recon_combined, dim=0)
+    recons = torch.cat(recons, dim=0)
+    masks = torch.cat(masks, dim=0)
+    slots = torch.cat(slots, dim=0)
+    # recon_combined, recons, masks, slots = map(
+    #   lambda x: torch.cat(x, dim=0), [recon_combined, recons, masks, slots]
+    # )
     return recon_combined, recons, masks, slots
 
 
@@ -419,11 +434,14 @@ class SoftPositionEmbed(nn.Module):
     return inputs + self.dense(self.grid)
 
 
+@torch.jit.script
 def detect_background(masks):
   # TODO: also filter out empty slots if there is redundency
   # get key mask for later transformer network
+  # masks = masks * (masks > 0.8)
   area = masks.sum(dim=3).sum(dim=2)  # batch_size, num_slots, 1
-  is_background = (area == area.max(dim=1, keepdim=True)[0]).squeeze(dim=-1)  # batch_size, num_slots
+  # is_background = (area == area.min(dim=1, keepdim=True)[0]).squeeze(dim=-1)  # batch_size, num_slots
+  is_background = (area == area.max(dim=1, keepdim=True)[0]).squeeze(dim=-1) # batch_size, num_slots
   return is_background
 
 
@@ -444,39 +462,68 @@ def detect_background(masks):
 #   object_id = torch.argmin(color_distances, dim=-1) # batch_size
 #   return object_id
 
+@torch.jit.script
+def rgb_to_hue_tensor(color: torch.Tensor):
+    assert color.shape[-1] == 3
+    cmax, cmax_idx = torch.max(color, dim=-1)
+    cmin = torch.min(color, dim=-1)[0]
+    delta = cmax - cmin
+    cmax_idx[delta == 0] = 3
+    res0 = (color[:, :, 1] - color[:, :, 2]) / torch.clamp(delta, min=1e-4)
+    res1 = ((color[:, :, 2] - color[:, :, 0]) / torch.clamp(delta, min=1e-4)) + 2
+    res2 = ((color[:, :, 0] - color[:, :, 1]) / torch.clamp(delta, min=1e-4)) + 4
+    res = res0 * (cmax_idx == 0).float() + res1 * (cmax_idx == 1).float() + res2 * (cmax_idx == 2).float()
+    res = (res / 6.0) % 1.0
+    # hsl_h[cmax_idx == 0] = ((color[:, :, 1] - color[:, :, 2]) / delta)[cmax_idx == 0] 
+    # hsl_h[cmax_idx == 1] = (((color[:, :, 2] - color[:, :, 0]) / delta) + 2)[cmax_idx == 1]
+    # hsl_h[cmax_idx == 2] = (((color[:, :, 0] - color[:, :, 1]) / delta) + 4)[cmax_idx == 2]
+    # hsl_h[cmax_idx == 3] = 0.
+    # hsl_h = (hsl_h / 6.0) % 1.0
+    # assert torch.norm(res - hsl_h).item() < 1e-3, (res, hsl_h)
+    return res
 
-def color_distance(color1: np.ndarray, color2: np.ndarray):
-  assert color1.shape[-1] == 3
-  assert color2.shape[-1] == 3
-  import matplotlib
-  hsv1 = matplotlib.colors.rgb_to_hsv(color1)
-  h1 = hsv1[..., 0]
-  hsv2 = matplotlib.colors.rgb_to_hsv(color2)
-  h2 = hsv2[..., 0]
-  return np.abs(h1 - h2)
+
+def color_distance(color1: torch.Tensor, color2: torch.Tensor):
+    assert color1.shape[-1] == 3
+    assert color2.shape[-1] == 3
+    # import matplotlib
+    # hsv1 = matplotlib.colors.rgb_to_hsv(color1)
+    # h1 = hsv1[..., 0]
+    h1 = rgb_to_hue_tensor(color1)
+    # assert np.linalg.norm(tensor_h1.cpu().numpy() - h1) < 1e-3
+    # hsv2 = matplotlib.colors.rgb_to_hsv(color2)
+    # h2 = hsv2[..., 0]
+    h2 = rgb_to_hue_tensor(color2)
+    res = torch.minimum(torch.abs(h1 - h2), 1 - torch.abs(h1 - h2))
+    return res
+  
+
+@torch.jit.script
+def hue_distance(hue1: torch.Tensor, hue2: torch.Tensor):
+  return torch.minimum(torch.abs(hue1 - hue2),1 - torch.abs(hue1 - hue2))
 
 
-def assign_object(obs, masks, COLORS, slot_features):
-  is_background = detect_background(masks)  # batch_size, num_slots
-  # print("is background", is_background.shape, is_background)
-  # binarize mask
-  masks = masks * (masks > 0.9)
-  avg_colors = (obs.unsqueeze(dim=1) * masks).sum(dim=3).sum(dim=2) / torch.maximum(
-    masks.sum(dim=3).sum(dim=2), 
-    1e-5 * torch.ones(masks.shape[0], masks.shape[1], 1, device=masks.device)
-  ) # batch_size, num_slots, num_channels
-  distances = np.stack(
-    [color_distance(avg_colors.detach().cpu().numpy(), COLORS[i]) for i in range(COLORS.shape[0])], axis=-1
-  ) # batch_size, num_slots, num_objects
-  distances = torch.from_numpy(distances).to(obs.device)
-   
-  # print("distances", distances, distances.shape)
-  distances = distances + is_background.unsqueeze(dim=-1).float() * 1e5 # Background slots should not be assigned
-  # print("with bg distances", distances) # bug
-  # Each object will be assigned a best slot. There may be slots that do not belong to any object, or belong to multiple objects
-  assignment = (distances == distances.min(dim=1, keepdim=True)[0]).float() # batch_size, num_slots, num_objects
-  object_features = torch.matmul(assignment.transpose(1, 2), slot_features)  # batch_size, num_objects, feature_dim
-  return object_features, assignment
+@torch.jit.script
+def assign_object(obs: torch.Tensor, masks: torch.Tensor, COLORS: torch.Tensor, slot_features: torch.Tensor):
+    is_background = detect_background(masks)  # batch_size, num_slots
+    # print("is background", is_background.shape, is_background)
+    # binarize mask
+    masks = masks * (masks > 0.9)
+    avg_colors = (obs.unsqueeze(dim=1) * masks).sum(dim=3).sum(dim=2) / torch.clamp(
+      masks.sum(dim=3).sum(dim=2), min=1e-5
+    ) # batch_size, num_slots, num_channels
+    avg_hue = rgb_to_hue_tensor(avg_colors)  # batch_size, num_slots
+    target_hue = rgb_to_hue_tensor(COLORS.unsqueeze(dim=0)) # 1, num_objects
+    distances = hue_distance(avg_hue[..., None], target_hue[:, None, :])
+    # distances = torch.stack(
+    #   [color_distance(avg_colors, COLORS[i].unsqueeze(dim=0).unsqueeze(dim=0)) for i in range(COLORS.shape[0])], dim=-1
+    # ) # batch_size, num_slots, num_objects
+    distances = distances + is_background.unsqueeze(dim=-1).float() * 1e5 # Background slots should not be assigned
+    # print("with bg distances", distances) # bug
+    # Each object will be assigned a best slot. There may be slots that do not belong to any object, or belong to multiple objects
+    assignment = (distances == distances.min(dim=1, keepdim=True)[0]).float() # batch_size, num_slots, num_objects
+    object_features = torch.matmul(assignment.transpose(1, 2), slot_features)  # batch_size, num_objects, feature_dim
+    return object_features, assignment
 
   
 def build_model(resolution, batch_size, num_slots, num_iterations,

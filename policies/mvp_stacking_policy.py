@@ -18,7 +18,9 @@ class MvpStackingPolicy(ActorCriticPolicy):
         self.privilege_dim = privilege_dim
         self.n_primitive = n_primitive
         self.act_dim = act_dim
-        self.num_bin = num_bin
+        if isinstance(num_bin, int):
+            num_bin = [num_bin] * act_dim
+        self.num_bin = np.asarray(num_bin, dtype=int)
         self.attn_value = attn_value
         slot_dim = 64
         # self.mvp_double_projector = nn.Sequential(
@@ -182,7 +184,8 @@ class MvpStackingPolicy(ActorCriticPolicy):
             act_param_dist[i].log_prob(act_params[i].squeeze(dim=-1)).unsqueeze(dim=-1)
             for i in range(self.act_dim)
         ]
-        act_params = [2 * (act_param / (self.num_bin - 1.0)) - 1 for act_param in act_params]
+        num_bin = torch.from_numpy(self.num_bin).to(obs.device)
+        act_params = [2 * (act_params[i] / (num_bin[i] - 1.0)) - 1 for i in range(len(act_params))]
         actions = torch.cat([act_type] + act_params, dim=-1)
         log_prob = torch.sum(torch.stack([act_type_logprob] + act_param_logprob, dim=-1), dim=-1)
         return value_pred, actions, log_prob, rnn_hxs
@@ -199,7 +202,8 @@ class MvpStackingPolicy(ActorCriticPolicy):
         selected_param_logits = [(logit * onehot.unsqueeze(dim=-1).detach()).sum(dim=1) for logit in act_param_logits]
         act_param_dist = [Categorical(logits=logit) for logit in selected_param_logits]
 
-        act_params = torch.round((actions[:, 1:] + 1) / 2 * (self.num_bin - 1.0)).int()
+        num_bin = torch.from_numpy(self.num_bin).to(obs.device)
+        act_params = torch.round((actions[:, 1:] + 1) / 2 * (num_bin - 1.0)).int()
         act_type_logprob = act_type_dist.log_prob(act_type)
         act_param_logprob = [
             act_param_dist[i].log_prob(act_params[:, i])

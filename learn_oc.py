@@ -93,7 +93,7 @@ def train(args):
 
 
 def eval(args):
-    '''
+    # '''
     with open("test_tasks_raw.pkl", "rb") as f:
         data = pickle.load(f)
     obs = data[:, -3 * 128 * 128:]
@@ -108,11 +108,12 @@ def eval(args):
                 total_dataset.append(dataset)
         data = np.concatenate([total_dataset[i]["obs"] for i in range(len(total_dataset))], axis=0) 
     obs = data[:, :3 * 128 * 128]
-    # '''
+    '''
     model = SlotAttentionAutoEncoder(resolution=(128, 128), num_slots=args.num_slots, num_iterations=3)
     model.to(device)
     model.load_state_dict(torch.load(args.load_path)["param"])
-    obs_batch = obs[np.random.randint(0, obs.shape[0], size=5)]
+    # obs_batch = obs[np.random.randint(0, obs.shape[0], size=5)]
+    obs_batch = obs[:5]
     visualize(model, obs_batch)
 
     

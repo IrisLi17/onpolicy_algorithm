@@ -62,7 +62,7 @@ class PPO(object):
         self.expansion = OfflineExpansion(self.rollouts, self.env, self.policy)
 
     def learn(self, total_timesteps, callback=None):
-        data_rounds = [3,]
+        data_rounds = [1, 2, 3,]
         rl_start_update = 0
         self.set_task_and_il(data_rounds)
         
@@ -223,7 +223,7 @@ class PPO(object):
         for k in total_dataset[0].keys():
             il_dataset[k] = np.concatenate([total_dataset[i][k] for i in range(len(total_dataset))], axis=0) 
         self.il_warmup(
-            il_dataset, train_value=True, n_epoch=10, eval_interval=5, batch_size=64, 
+            il_dataset, train_value=False, n_epoch=10, eval_interval=5, batch_size=64, 
             n_aux_epoch=0
         )
 
@@ -238,7 +238,7 @@ class PPO(object):
         losses = dict(policy_loss=deque(maxlen=50), grad_norm=deque(maxlen=50), 
                       aux_pos_loss=deque(maxlen=50), aux_rot_loss=deque(maxlen=50), 
                       param_norm=deque(maxlen=50), value_loss=deque(maxlen=50),
-                      action_param_error=deque(maxlen=50), action_type_error=deque(maxlen=50))
+                      action_param_error=deque(maxlen=1), action_type_error=deque(maxlen=1))
         optimizer = optim.Adam([p[1] for p in self.policy.named_parameters() if not "log_std" in p[0]], lr=1e-3, weight_decay=0)
         # self.save(os.path.join(logger.get_dir(), "model_init.pt"))
                 
@@ -266,11 +266,15 @@ class PPO(object):
         # success_episodes, total_episodes = evaluate_fixed_states(self.env, self.policy, self.device, None, None, 200, deterministic=True)
         # print("Initial success episode: drawer %d / %d, object %d / %d" % (success_episodes[0], total_episodes[0], success_episodes[1], total_episodes[1]))
         # print("Initial success episode: %d / %d" % (success_episodes, total_episodes))
+        il_start_time = time.time()
         for i in range(n_aux_epoch + n_epoch):
             np.random.shuffle(indices)
             for j in range(num_sample // batch_size):
                 mb_idx = indices[batch_size * j: batch_size * (j + 1)]
-                obs_batch = torch.from_numpy(dataset["obs"][mb_idx]).float().to(self.device)
+                if isinstance(dataset["obs"][mb_idx], np.ndarray):
+                    obs_batch = torch.from_numpy(dataset["obs"][mb_idx]).float().to(self.device)
+                else:
+                    obs_batch = dataset["obs"][mb_idx]
                 actions_batch = dataset["action"][mb_idx]
                 recurrent_hidden_states_batch = torch.zeros((obs_batch.shape[0], 1))
                 masks_batch = torch.ones((obs_batch.shape[0], 1))
@@ -290,14 +294,14 @@ class PPO(object):
                 # total_norm = torch.norm(torch.stack([torch.norm(g.detach(), 2).to(device) for g in grads]), 2)
                 total_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 optimizer.step()
-                with torch.no_grad():
-                    _, pred_actions, pred_logprob, _ = self.policy.act(obs_batch, deterministic=True)
-                    action_param_error = torch.norm(pred_actions[:, 1:] - actions_batch[:, 1:], 1, dim=-1).mean()
-                    action_type_error = torch.norm(pred_actions[:, 0: 1] - actions_batch[:, 0: 1], 0, dim=-1).mean()
-                    if j == 0:
+                if j == 0:
+                    with torch.no_grad():
+                        _, pred_actions, pred_logprob, _ = self.policy.act(obs_batch, deterministic=True)
+                        action_param_error = torch.norm(pred_actions[:, 1:] - actions_batch[:, 1:], 1, dim=-1).mean()
+                        action_type_error = torch.norm(pred_actions[:, 0: 1] - actions_batch[:, 0: 1], 0, dim=-1).mean()
                         print("pred action", pred_actions[0], "gt action", actions_batch[0])
-                losses["action_param_error"].append(action_param_error.item())
-                losses["action_type_error"].append(action_type_error.item())
+                    losses["action_param_error"].append(action_param_error.item())
+                    losses["action_type_error"].append(action_type_error.item())
                 losses["param_norm"].append(
                     torch.norm(torch.stack([torch.norm(p.detach()) for p in self.policy.parameters()])).item()
                 )
@@ -312,6 +316,7 @@ class PPO(object):
                 logger.logkv("il_sr", success_episodes / total_episodes)
                 # self.save(os.path.join(logger.get_dir(), "model_init%d.pt" % i))
             logger.logkv("epoch", i)
+            logger.logkv("elapsed_time", time.time() - il_start_time)
             for k in losses:
                 # print(k, np.mean(losses[k]))
                 logger.logkv(k, np.mean(losses[k]))

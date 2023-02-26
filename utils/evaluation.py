@@ -142,7 +142,7 @@ def evaluate_fixed_states(env, policy, device, initial_states, goals, n_episode=
     return success_episode, total_episode
 
 
-def evaluate_tasks(env, policy, task_file="test_tasks.pkl"):
+def evaluate_tasks(env, policy, task_file="test_tasks.pkl", evaluate_episode=200, deterministic=False):
     with open(task_file, "rb") as f:
         new_tasks = pickle.load(f)
     if isinstance(new_tasks, list):
@@ -164,9 +164,9 @@ def evaluate_tasks(env, policy, task_file="test_tasks.pkl"):
     detail_stats = [[0, 0] for _ in range(7)]
     obs = env.reset()
     n_to_move = env.env_method("oracle_feasible", obs.detach().cpu().numpy())[0][0]
-    while n_episode < 200:
+    while n_episode < evaluate_episode:
         with torch.no_grad():
-            _, actions, _, _ = policy.act(obs, deterministic=False)
+            _, actions, _, _ = policy.act(obs, deterministic=deterministic)
         # with torch.no_grad():
         #     aux_pos_loss, aux_rot_loss = policy.get_aux_loss(obs)
         # print("aux pos loss", aux_pos_loss, "aux rot loss", aux_rot_loss)

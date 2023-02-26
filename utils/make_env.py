@@ -48,10 +48,10 @@ def make_env(env_id, rank, log_dir=None, obs_keys=None, done_when_success=False,
     return env
 
 
-def make_vec_env(env_id, num_workers, device, normalize=False, training=True, **kwargs):
+def make_vec_env(env_id, num_workers, device, normalize=False, training=True, reset_when_done=True, **kwargs):
     def make_env_thunk(i):
         return lambda: make_env(env_id, i, **kwargs)
-    env = SubprocVecEnv([make_env_thunk(i) for i in range(num_workers)])
+    env = SubprocVecEnv([make_env_thunk(i) for i in range(num_workers)], reset_when_done=reset_when_done)
     if normalize:
         from vec_env.vec_normalize import VecNormalize
         env = VecNormalize(env, training=training, norm_obs=("obs" in normalize), norm_reward=("ret" in normalize))

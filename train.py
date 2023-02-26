@@ -83,13 +83,18 @@ def main():
     else:
         model.load(args.load_path, eval=True)
         from utils.evaluation import evaluate, evaluate_tasks
-        # evaluate_tasks(env, policy, "distill_tasks_expand5.pkl")
-        evaluate_tasks(env, policy, "test_tasks_2b.pkl")
-        evaluate_tasks(env, policy, "test_tasks_4b.pkl")
-        evaluate_tasks(env, policy, "test_tasks.pkl")
+        # evaluate_tasks(env, policy, "distill_tasks_new_raw_expand3.pkl")
+        # evaluate_tasks(env, policy, "test_tasks_2b.pkl")
+        # evaluate_tasks(env, policy, "test_tasks_4b.pkl")
+        print("==== Evaluating 3T ====")
+        evaluate_tasks(env, policy, "test_tasks_raw.pkl", 50, deterministic=False)
+        print("==== Evaluating I shape ====")
+        evaluate_tasks(env, policy, "test_tasks_raw_I.pkl", 50, deterministic=False)
+        print("==== Evaluating Y shape ====")
+        evaluate_tasks(env, policy, "test_tasks_raw_Y.pkl", 50, deterministic=False)
         # "../stacking_env/warmup_tasks.pkl"
         # "logs/ppo_BulletPixelStack-v1/base1/generated_tasks_61.pkl"
-        # evaluate(env, policy, 10, task_file="distill_tasks_expand5.pkl")
+        # evaluate(env, policy, 10, task_file="distill_tasks_new_raw_expand2.pkl")
 
 
 if __name__ == "__main__":
