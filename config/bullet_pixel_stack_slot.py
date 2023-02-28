@@ -1,13 +1,16 @@
 from policies.slot_attention_policy import SlotAttentionPoicy
 import numpy as np
 
+
+# expand_rounds = [1, 2, 3]
+expand_rounds = [2]
 config = dict(
     env_id="BulletPixelStack-v1",
     num_workers=64,
     algo="ppo",
     # name="distill_expand5_alltask_aux_sdim64",
-    name="slot_attn_rl_newdata_oldenc_round123_xy41",
-    total_timesteps=int(5e7),
+    name="slot_attn_rl_newdata_oldenc_round2_xy41",
+    total_timesteps=int(1e6),
     create_env_kwargs=dict(
         use_raw_img=True,
         kwargs=dict(
@@ -33,6 +36,8 @@ config = dict(
         noptepochs=6,
         ent_coef=0.001,
         cliprange=0.3,
+        task_files=["distill_tasks_new_raw_expand%d.pkl" % i for i in expand_rounds],
+        demo_files=["distill_dataset_new_stacking_raw_expand%d.pkl" % i for i in expand_rounds],
     ),
     # warmup_dataset="../stacking_env/warmup_dataset_stacking.pkl",
     # warmup_dataset="distill_dataset_stacking.pkl",

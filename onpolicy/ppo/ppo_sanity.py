@@ -18,7 +18,7 @@ class PPO(object):
     def __init__(self, env, policy: nn.Module, device="cpu", n_steps=1024, nminibatches=32, noptepochs=10, gamma=0.99,
                  lam=0.95, learning_rate=2.5e-4, cliprange=0.2, ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, eps=1e-5,
                  use_gae=True, use_clipped_value_loss=True, use_linear_lr_decay=False, use_wandb=False, warmup_dataset:dict=None,
-                 store_raw_img=0):
+                 store_raw_img=0, task_files=[], demo_files=[]):
         self.env = env
         self.policy = policy
         self.device = device
@@ -38,6 +38,8 @@ class PPO(object):
         self.use_wandb = use_wandb
         self.warmup_dataset = warmup_dataset
         self.store_raw_img = store_raw_img
+        self.task_files = task_files
+        self.demo_files = demo_files
 
         # if isinstance(self.env, VecEnv):
         #     self.n_envs = self.env.num_envs
@@ -64,7 +66,7 @@ class PPO(object):
     def learn(self, total_timesteps, callback=None):
         data_rounds = [1, 2, 3,]
         rl_start_update = 0
-        self.set_task_and_il(data_rounds)
+        self.set_task_and_il(task_files=self.task_files, demo_files=self.demo_files)
         
         episode_rewards = deque(maxlen=1000)
         ep_infos = deque(maxlen=1000)
@@ -186,28 +188,34 @@ class PPO(object):
             #     rl_start_update = j
             #     self.set_task_and_il(data_round)
 
-    def set_task_and_il(self, data_rounds: list):
+    def set_task_and_il(self, task_files: List, demo_files: List):
         self.env.env_method("clear_tasks")
         total_tasks = []
-        for data_round in data_rounds:
-            with open("distill_tasks_new_%sexpand%d.pkl" % ("raw_" if self.store_raw_img else "", data_round), "rb") as f:
+        for task_file in task_files:
+            with open(task_file, "rb") as f:
                 new_tasks = pickle.load(f)
             if isinstance(new_tasks, list):
                 total_tasks.extend(new_tasks)
             else:
                 total_tasks.append(new_tasks)
-        total_tasks = np.concatenate(total_tasks, axis=0)
-        task_idx = np.arange(total_tasks.shape[0])
-        np.random.shuffle(task_idx)
-        task_per_env = total_tasks.shape[0] // self.n_envs if (
-            total_tasks.shape[0] % self.n_envs) == 0 else total_tasks.shape[0] // self.n_envs + 1
-        print("tasks per env", task_per_env)
-        for i in range(self.n_envs):
-            self.env.env_method("add_tasks", total_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]], indices=i)        
+        if len(total_tasks):
+            total_tasks = np.concatenate(total_tasks, axis=0)
+            if total_tasks.shape[0] < self.env.num_envs:
+                self.env.env_method("add_tasks", total_tasks)
+            else:
+                task_idx = np.arange(total_tasks.shape[0])
+                np.random.shuffle(task_idx)
+                task_per_env = total_tasks.shape[0] // self.env.num_envs
+                print("tasks per env", task_per_env)
+                for i in range(self.env.num_envs):
+                    if i == self.env.num_envs - 1:
+                        self.env.env_method("add_tasks", total_tasks[task_idx[task_per_env * i:]], indices=i)
+                    else:
+                        self.env.env_method("add_tasks", total_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]], indices=i)       
         
         total_dataset = []
-        for data_round in data_rounds:
-            with open("distill_dataset_new_stacking_%sexpand%d.pkl" % ("raw_" if self.store_raw_img else "", data_round), "rb") as f:
+        for demo_file in demo_files:
+            with open(demo_file, "rb") as f:
                 try:
                     while True:
                         dataset = pickle.load(f)
@@ -220,12 +228,13 @@ class PPO(object):
                 except EOFError:
                     pass
         il_dataset = dict()
-        for k in total_dataset[0].keys():
-            il_dataset[k] = np.concatenate([total_dataset[i][k] for i in range(len(total_dataset))], axis=0) 
-        self.il_warmup(
-            il_dataset, train_value=False, n_epoch=10, eval_interval=5, batch_size=64, 
-            n_aux_epoch=0
-        )
+        if len(total_dataset):
+            for k in total_dataset[0].keys():
+                il_dataset[k] = np.concatenate([total_dataset[i][k] for i in range(len(total_dataset))], axis=0) 
+            self.il_warmup(
+                il_dataset, train_value=False, n_epoch=10, eval_interval=5, batch_size=64, 
+                n_aux_epoch=0
+            )
 
     def il_warmup(self, dataset, train_value=False, n_epoch=15, batch_size=32, eval_interval=10, n_aux_epoch=0):
         # dataset["obs"] = torch.from_numpy(dataset["obs"]).float().to(self.device)
