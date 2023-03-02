@@ -9,7 +9,7 @@ config = dict(
     num_workers=64,
     algo="ppo",
     # name="distill_expand5_alltask_aux_sdim64",
-    name="slot_attn_rl_newdata_oldenc_round2_xy41",
+    name="slot_attn_rl_newdata_newenc_round2_xy41",
     total_timesteps=int(1e6),
     create_env_kwargs=dict(
         use_raw_img=True,
@@ -21,7 +21,7 @@ config = dict(
     ),
     policy_class=SlotAttentionPoicy,
     policy=dict(
-        encoder_path="logs/learn_oc_7slot/model_265000.pt",
+        encoder_path="logs/learn_oc_7slot_newdata/model_265000.pt",
         num_slots=7,
         act_dim=6, 
         num_bin=[41, 41, 21, 21, 21, 21],
