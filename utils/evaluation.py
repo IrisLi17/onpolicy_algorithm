@@ -17,20 +17,21 @@ def evaluate(env, policy, n_episode, task_file="generated_tasks_0.pkl"):
     for i in range(env.num_envs):
         env.env_method("add_tasks", new_tasks[task_idx[task_per_env * i: task_per_env * (i + 1)]])
                 
+    if os.path.exists("tmp"):
+        shutil.rmtree("tmp")
+    os.makedirs("tmp", exist_ok=True)
     episode_count = 0
     frame_count = 0
     obs = env.reset()
     feat_dim = env.get_attr("feature_dim")[0]
     print("goal state", env.get_attr("goal_dict")[0]["full_state"])
     goal_img = env.env_method("get_goal_image")[0]
+    plt.imsave("tmp/goal%d.png" % episode_count, goal_img)
     episode_reward = 0
     episode_length = 0
     reset_step = 0
     # env.env_method("start_rec", "output_0", indices=0)
     fig, ax = plt.subplots(1, 1)
-    if os.path.exists("tmp"):
-        shutil.rmtree("tmp")
-    os.makedirs("tmp", exist_ok=True)
     if hasattr(env, "obs_rms"):
         init_obs_mean = env.obs_rms.mean.copy()
         init_obs_std = env.obs_rms.var.copy()
@@ -38,7 +39,7 @@ def evaluate(env, policy, n_episode, task_file="generated_tasks_0.pkl"):
         img = env.render(mode="rgb_array")
         ax.cla()
         ax.imshow(img)
-        plt.imsave("tmp/tmp%d.png" % frame_count, np.concatenate([img, goal_img], axis=1))
+        plt.imsave("tmp/tmp%d_%d.png" % (episode_count, frame_count), img)
         plt.pause(0.01)
         with torch.no_grad():
             value_pred, actions, _, _ = policy.act(obs, deterministic=False)
@@ -56,7 +57,7 @@ def evaluate(env, policy, n_episode, task_file="generated_tasks_0.pkl"):
         if done[0]:
             # env.env_method("end_rec", indices=0)
             img = env.render(mode="rgb_array")
-            plt.imsave("tmp/tmp%d.png" % frame_count, np.concatenate([img, goal_img], axis=1))
+            plt.imsave("tmp/tmp%d_%d.png" % (episode_count, frame_count), img)
             frame_count += 1
             print("terminal obs", info[0]["terminal_observation"][feat_dim * 2 + 7:].reshape(2, -1))
             print(episode_count, "episode reward", episode_reward, "episode length", episode_length)
@@ -68,6 +69,7 @@ def evaluate(env, policy, n_episode, task_file="generated_tasks_0.pkl"):
             reset_step = frame_count
             # env.env_method("start_rec", "output_%d" % episode_count, indices=0)
             goal_img = env.env_method("get_goal_image")[0]
+            plt.imsave("tmp/goal%d.png" % episode_count, goal_img)
 
 
 def evaluate_fixed_states(env, policy, device, initial_states, goals, n_episode=100, deterministic=True, debug=False):
