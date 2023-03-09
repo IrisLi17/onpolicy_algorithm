@@ -1,0 +1,42 @@
+- color:
+  - 255
+  - 0
+  - 0
+  id: 0
+  isthing: 0
+  name: Red
+- color:
+  - 255
+  - 255
+  - 0
+  id: 1
+  isthing: 0
+  name: Yellow
+- color:
+  - 51
+  - 204
+  - 204
+  id: 2
+  isthing: 0
+  name: LightBlue
+- color:
+  - 204
+  - 51
+  - 204
+  id: 3
+  isthing: 0
+  name: Pink
+- color:
+  - 51
+  - 204
+  - 51
+  id: 4
+  isthing: 0
+  name: Green
+- color:
+  - 0
+  - 0
+  - 255
+  id: 5
+  isthing: 0
+  name: Blue
