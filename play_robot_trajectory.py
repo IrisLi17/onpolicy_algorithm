@@ -5,6 +5,11 @@ import importlib
 
 # Usage: to replay trajectories in the dataset
 # python play_robot_trajectory.py --config config.bullet_pixel_stack_slot --traj_path distill_dataset_new_stacking_raw_expand3.pkl
+# to predict object-level actions with a policy
+# python play_robot_trajectory.py --config config.bullet_pixel_stack_slot --use_rl \
+#     --load_path logs/ppo_BulletPixelStack-v1/slot_attn_rl_newdata_newenc_round123_xy41/model_0.pt \
+#     --task_path test_tasks_raw.pkl
+
 def parse_arguments():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--config", type=str)
