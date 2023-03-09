@@ -181,3 +181,28 @@ def evaluate_tasks(env, policy, task_file="test_tasks.pkl", evaluate_episode=200
             obs = env.reset()
             n_to_move = env.env_method("oracle_feasible", obs.detach().cpu().numpy())[0][0]
     print("success rate", n_success / n_episode, "detail stats", detail_stats)
+
+
+def _parse_task_from_obs(obs: np.ndarray):
+    assert len(obs.shape) == 1 and obs.shape[0] == 6 * 128 * 128 + 7 + 84
+    task = np.concatenate([obs[-91:], obs[3 * 128 * 128: 6 * 128 * 128]])
+    return task
+
+
+def trajectory_replay(env, dataset_file="distill_dataset_new_stacking_raw_expand3.pkl"):
+    assert env.num_envs == 1
+    with open(dataset_file, "rb") as f:
+        try:
+            while True:
+                traj = pickle.load(f)
+                obs_seq = traj["obs"]
+                action_seq = traj["action"]
+                task = _parse_task_from_obs(obs_seq[0])
+                env.env_method("clear_tasks")
+                env.env_method("add_tasks", np.expand_dims(task, 0))
+                env.reset()
+                for step_idx in range(action_seq.shape[0]):
+                    obs, reward, done, info = env.step(torch.from_numpy(action_seq[step_idx]).unsqueeze(dim=0))
+                print(info)
+        except EOFError:
+            pass
