@@ -149,8 +149,21 @@ def evaluate_tasks(env, policy, task_file="test_tasks.pkl", evaluate_episode=200
         new_tasks = pickle.load(f)
     if isinstance(new_tasks, list):
         new_tasks = np.concatenate(new_tasks[0:6], axis=0)
+    # new_tasks = new_tasks[77:78]
+    if task_file == "test_tasks_raw.pkl":
+        new_tasks = new_tasks[:1]
+        new_tasks[:, 7 + 4 * 7: 7 + 5 * 7] = np.array([0.38, -0.23, 0.025, 0., 0., np.sin(np.pi / 4), np.cos(np.pi / 4)])
+        new_tasks[:, 7 + 5 * 7: 7 + 6 * 7] = np.array([0.3, 0.105, 0.025, 0., 0., np.sin(np.pi / 5), np.cos(np.pi / 5)])
+    elif task_file == "test_tasks_raw_I.pkl":
+        new_tasks = new_tasks[14:15]
+        new_tasks[:, 7: 7 + 1 * 7] = np.array([0.5185, -0.1691, 0.025, 0., 0., np.sin(-np.pi / 7), np.cos(-np.pi / 7)])
+        new_tasks[:, 7 + 2 * 7: 7 + 3 * 7] = np.array([0.4054, -0.1705, 0.025, 0., 0., np.sin(np.pi * 3 / 11), np.cos(np.pi * 3 / 11)])
+        new_tasks[:, 7 + 3 * 7: 7 + 4 * 7] = np.array([0.3350, 0.1617, 0.025, 0., 0., np.sin(np.pi * 3 / 14), np.cos(np.pi * 3 / 14)])
+        print(new_tasks[0, 7 :7 + 42].reshape(6, 7), new_tasks[0, 7 + 42: 7 + 42 * 2].reshape(6, 7))
     task_idx = np.arange(new_tasks.shape[0])
-    np.random.shuffle(task_idx)
+    goal_img = (new_tasks[0, -3 * 128 * 128:].reshape(3, 128, 128).transpose(1, 2, 0)).astype(np.uint8)
+    plt.imsave("tmp/tmp_goal.png", goal_img)
+    # np.random.shuffle(task_idx)
     assert env.num_envs == 1
     task_per_env = new_tasks.shape[0] // env.num_envs if (
         new_tasks.shape[0] % env.num_envs) == 0 else new_tasks.shape[0] // env.num_envs + 1
@@ -163,17 +176,43 @@ def evaluate_tasks(env, policy, task_file="test_tasks.pkl", evaluate_episode=200
     # env.env_method("set_dist_threshold", 0.08)
     n_episode = 0
     n_success = 0
+    frame_count = 0
     detail_stats = [[0, 0] for _ in range(7)]
     obs = env.reset()
     n_to_move = env.env_method("oracle_feasible", obs.detach().cpu().numpy())[0][0]
+    if task_file == "test_tasks_raw.pkl":
+        action_seq = [
+            torch.tensor([ 3.0000, -0.6000 + 0.6 * 0,  0.9000 - 0.5 * 0, -0.8000 + 0.1,  1.0000,  1.0000,  0.4000]),
+            torch.tensor([ 2.0000,  0.6000,  0.4000, -0.8000 + 0.1,  0.0000,  1.0000, -0.5000]),
+            torch.tensor([ 1.0000,  0.7000,  0.4000, -0.3000 + 0.1,  0.0000,  0.0000, -1.0000]),
+            torch.tensor([ 5.0000, -0.4000,  0.0000, -0.9000 + 0.2, -0.1000,  1.0000, -0.1000]),
+            torch.tensor([ 4.0000, -0.6000,  0.9000, -0.2000 + 0.1,  0.0000,  0.0000,  0.4000]),
+            torch.tensor([ 0.0000, -0.4000, -0.1000 + 0.1, -0.3000 + 0.1,  0.0000,  0.0000, -0.3000])
+        ]
+    elif task_file == "test_tasks_raw_I.pkl":
+        action_seq = [
+            torch.tensor([ 3.0000, -0.8000, -0.3000 + 0.4 * 0, -0.8000 + 0.1,  0.2000,  1.0000,  0.2000]),
+            torch.tensor([ 0.0000, -0.8000, -0.3000 + 0.4 * 0,  0.4000 - 0.6,  0.0000,  0.0000, -0.9000]),
+            torch.tensor([ 1.0000, -0.7000, -0.4000 + 0.4 * 0,  0.2000 + 0.1,  0.1000,  1.0000,  0.0000]),
+        ]
     while n_episode < evaluate_episode:
         with torch.no_grad():
             _, actions, _, _ = policy.act(obs, deterministic=deterministic)
+        img = env.render(mode="rgb_array")
+        plt.imsave("tmp/tmp%d_%d.png" % (n_episode, frame_count), img)
+        actions = action_seq[frame_count].unsqueeze(dim=0)
+        print(actions[0])
         # with torch.no_grad():
         #     aux_pos_loss, aux_rot_loss = policy.get_aux_loss(obs)
         # print("aux pos loss", aux_pos_loss, "aux rot loss", aux_rot_loss)
         obs, reward, done, info = env.step(actions)
+        frame_count += 1
         if done[0]:
+            img = env.render(mode="rgb_array")
+            plt.imsave("tmp/tmp%d_%d.png" % (n_episode, frame_count), img)
+            if info[0]["is_success"]:
+                return
+            print("reset")
             n_success += info[0]["is_success"]
             n_episode += 1
             detail_stats[n_to_move][0] += info[0]["is_success"]

@@ -57,7 +57,8 @@ def main():
             raise NotImplementedError
         model.load(args.load_path, eval=True)
         from utils.evaluation import evaluate_tasks
-        evaluate_tasks(env, policy, args.task_path, 100, deterministic=False)
+        evaluate_tasks(env, policy, args.task_path, 10, deterministic=True)
+        
 
 
 if __name__ == "__main__":
