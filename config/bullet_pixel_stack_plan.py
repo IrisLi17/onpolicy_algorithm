@@ -17,7 +17,7 @@ config = dict(
             n_object=6, reward_type="sparse", action_dim=7, generate_data=True, primitive=True,
             n_to_stack=np.array([[1, 2, 3]]), name="allow_rotation", use_gpu_render=False,
             feature_dim=3 * 128 * 128,
-            compute_path=False, robot="panda", invisible_robot=False, use_low_level_planner=True,
+            record_path=False, robot="panda", invisible_robot=False, use_low_level_planner=True,
         ),
     ),
     policy_class=SlotAttentionPoicy,
